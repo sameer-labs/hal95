@@ -49,15 +49,15 @@ const DEEPSEEK_MODEL = "deepseek-flash";
 const DEEPSEEK_TIMEOUT_MS = 20_000;
 
 /**
- * Image provider. The old runwayml/stable-diffusion-v1-5 repo was retired.
- * SDXL-Turbo is open (not gated), cheap and fast: 1-4 steps at 512x512, which
- * keeps both latency and spend down. Gated repos (SD3, FLUX) return 403 for
- * tokens that have not accepted their licences. The request body follows the
- * HF `{ inputs, parameters, options }` shape.
+ * Image provider. As of Nov 2026 this is the only text-to-image model mapped to
+ * the `hf-inference` provider (verified with the Hugging Face model API). It is
+ * gated: the Hugging Face account must accept the SD3 licence and the token
+ * must have Inference Providers write permission, otherwise the router returns
+ * 403. The request body follows the HF `{ inputs, parameters, options }` shape.
  */
 const IMAGE_PROVIDER_URL =
-  "https://router.huggingface.co/hf-inference/models/stabilityai/sdxl-turbo";
-const IMAGE_MODEL = "stabilityai/sdxl-turbo";
+  "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-3-medium-diffusers";
+const IMAGE_MODEL = "stabilityai/stable-diffusion-3-medium-diffusers";
 const IMAGE_SECRET_NAME = "HUGGINGFACE_API_KEY";
 const IMAGE_TIMEOUT_MS = 60_000;
 const MAX_DRAW_PROMPT_CHARS = 200;
@@ -446,8 +446,8 @@ async function handleDraw(request, env, origin) {
         inputs: styledPrompt,
         parameters: {
           negative_prompt: "photorealistic, highly detailed, professional, masterpiece",
-          num_inference_steps: 4,
-          guidance_scale: 0,
+          num_inference_steps: 20,
+          guidance_scale: 7,
           width: 512,
           height: 512,
         },

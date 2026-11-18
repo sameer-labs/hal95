@@ -107,7 +107,7 @@ which opens a Paint-style window with a deliberately crude generated image.
             │                           │
             ▼                           ▼
    DeepSeek chat API          Hugging Face Inference
-   deepseek-flash             SDXL-Turbo (512px)
+   deepseek-flash             SD3-Medium (512px)
    (80 output tokens)         (crude style prompt)
 ```
 
@@ -139,7 +139,7 @@ three real problems:
 | Styles | CSS + [98.css](https://jdan.github.io/98.css/) via CDN | Authentic Win98 widgets; the only runtime third-party dependency |
 | Logic | Vanilla ES modules | No build step, readable in DevTools |
 | Text model | DeepSeek `deepseek-flash` | Cheap, fast, good at terse character work |
-| Image model | `stabilityai/sdxl-turbo` on Hugging Face Inference Providers | Open, fast, cheap, and fits the deliberately bad art |
+| Image model | `stabilityai/stable-diffusion-3-medium-diffusers` on `hf-inference` | The only live text-to-image mapping on that provider (Nov 2026); gated |
 | Proxy | Cloudflare Worker + KV | Free tier, secrets, a global edge, durable counters |
 | Hosting | GitHub Pages | Free static hosting, fits the project's scale |
 | Tests | Playwright | One smoke test, no framework |
@@ -458,9 +458,12 @@ python3 tools/make-placeholder-avatars.py
   across isolates but can lag by up to a minute, so a fast burst can overshoot
   the nominal limit. The daily cap is still a spending guard, not a billing
   guarantee. A Durable Object would be the strict version.
-- **The image token must have Inference Providers permission.** A token without
-  it receives `403` from Hugging Face; the UI then correctly shows
-  `THE PRINTER IS ON FIRE.` Check `npx wrangler tail` if Draw always fails.
+- **The image model is gated.** `stabilityai/stable-diffusion-3-medium-diffusers`
+  is the only text-to-image model currently mapped to `hf-inference`, and it
+  requires accepting the SD3 licence on Hugging Face plus a token with
+  Inference Providers write permission. Without both, Hugging Face returns
+  `403` and the UI correctly shows `THE PRINTER IS ON FIRE.` Check
+  `npx wrangler tail` if Draw always fails.
 - **Chat history is client-supplied.** The persona cannot be overridden, but a
   determined caller can send whatever history they like. That only affects their
   own conversation, and the token cap keeps the cost bounded.
@@ -484,7 +487,8 @@ python3 tools/make-placeholder-avatars.py
   refused inappropriate content in character.
 - `npm run test:ui`: 9/9 checks passed at 1440px and 375px, with no unexpected
   browser console errors. Draw returned the expected in-character failure
-  because the current Hugging Face token lacks Inference Providers permission.
+  because the current Hugging Face token cannot reach the gated SD3 model
+  (licence and/or Inference Providers permission).
 - Manual `curl` matrix: valid chat `200`, disallowed origin `403` with no CORS
   allow header, bad JSON / wrong role / >300 chars / >10 messages / wrong
   content type `400`, 25 rapid requests trigger `429`, daily-cap code path
