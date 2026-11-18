@@ -1,0 +1,12 @@
+{
+  "name": "hal95",
+  "version": "1.0.0",
+  "private": true,
+  "description": "HAL95 static site and Cloudflare Worker proxy",
+  "scripts": {
+    "test:ui": "node tools/test-ui.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.65.1"
+  }
+}
