@@ -1,0 +1,754 @@
+/* ==========================================================================
+   HAL95 — retro shell additions.
+   98.css supplies the Windows 98 widgets; this file supplies the desktop,
+   layout, avatar, boot sequence, CRT treatment and responsive behaviour.
+   ========================================================================== */
+
+:root {
+  --hal-desktop: #008080;
+  --hal-ink: #000000;
+  --hal-user-ink: #000080;
+  --hal-system-ink: #800000;
+  --hal-log-bg: #ffffff;
+  --hal-screen: #050805;
+  --hal-screen-ink: #c9d8c9;
+  --hal-crt-line: rgba(0, 0, 0, 0.05);
+  --hal-window-width: 780px;
+  --hal-font: "Pixelated MS Sans Serif", Tahoma, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  /* 11px is the native pixel size of the 98.css face; never scale it. */
+  font-size: 11px;
+  font-family: var(--hal-font);
+  background: var(--hal-desktop);
+  color: var(--hal-ink);
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.hal-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.hal-skip-link {
+  position: absolute;
+  left: 8px;
+  top: -40px;
+  z-index: 10000;
+  padding: 4px 8px;
+  background: #c0c0c0;
+  color: #000;
+  border: 1px solid #000;
+  font-size: 12px;
+}
+
+.hal-skip-link:focus {
+  top: 8px;
+}
+
+/* --------------------------------------------------------------- desktop */
+
+.hal-desktop {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.hal-window {
+  width: min(var(--hal-window-width), 100%);
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+}
+
+.hal-window > .window-body {
+  margin: 10px 10px 6px;
+  padding: 0;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* --------------------------------------------------------------- toolbar */
+
+.hal-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border-bottom: 1px solid #808080;
+  box-shadow: inset 0 -1px 0 #fff;
+  background: #c0c0c0;
+}
+
+.hal-toolbar button {
+  min-width: 48px;
+  padding: 2px 8px;
+  font-size: 11px;
+  letter-spacing: 0;
+  word-spacing: 1px;
+}
+
+.hal-toolbar-spacer {
+  flex: 1;
+}
+
+/* ------------------------------------------------------------ main layout */
+
+.hal-body {
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px;
+  background: #c0c0c0;
+  min-height: 0;
+}
+
+/* ---------------------------------------------------------------- avatar */
+
+.hal-avatar-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hal-avatar-frame {
+  position: relative;
+  border: 2px solid;
+  border-color: #808080 #fff #fff #808080;
+  box-shadow: inset 1px 1px 0 #000;
+  background:
+    repeating-linear-gradient(45deg, #101010 0 6px, #161616 6px 12px);
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+}
+
+.hal-avatar-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  filter: saturate(0.85) contrast(1.05);
+}
+
+/* Visible reminder when the supplied avatar PNG has not been added yet. */
+.hal-avatar-frame.is-missing::after {
+  content: "NO SIGNAL";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  letter-spacing: 0;
+  color: #46d67a;
+  background: #0a0a0a;
+}
+
+/* Never show the browser's broken-image glyph if the PNG is absent. */
+.hal-avatar-frame.is-missing img {
+  visibility: hidden;
+}
+
+.hal-avatar-scanlines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.22) 0 1px,
+    rgba(255, 255, 255, 0.04) 1px 3px
+  );
+  mix-blend-mode: multiply;
+}
+
+.hal-nameplate {
+  margin: 0;
+  padding: 2px 6px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #c0c0c0;
+  background: #000;
+  border: 1px solid #808080;
+  letter-spacing: 0;
+}
+
+.hal-nameplate span {
+  color: #46d67a;
+}
+
+.hal-mood-label {
+  margin: 0;
+  font-size: 11px;
+  text-align: center;
+  color: #404040;
+}
+
+.hal-mood-label span {
+  text-transform: uppercase;
+  font-weight: 700;
+  color: #000;
+}
+
+/* ------------------------------------------------------------ chat column */
+
+.hal-chat-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.hal-log {
+  flex: 1;
+  min-height: 260px;
+  max-height: 420px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px;
+  background: var(--hal-log-bg);
+  border: 2px solid;
+  border-color: #808080 #fff #fff #808080;
+  box-shadow: inset 1px 1px 0 #000;
+  font-family: var(--hal-font);
+  font-size: 11px;
+  letter-spacing: 0;
+  /* The pixel face has very thin spaces once the window is zoomed. */
+  word-spacing: 2px;
+  line-height: 16px;
+  -webkit-font-smoothing: none;
+  scrollbar-color: #c0c0c0 #fff;
+}
+
+.hal-line {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hal-line:last-child {
+  margin-bottom: 0;
+}
+
+.hal-line__who {
+  font-weight: 700;
+}
+
+.hal-line--user .hal-line__who {
+  color: var(--hal-user-ink);
+}
+
+.hal-line--bot .hal-line__who {
+  color: #400060;
+}
+
+.hal-line--system {
+  color: var(--hal-system-ink);
+  font-style: italic;
+}
+
+.hal-line--error .hal-line__who {
+  color: var(--hal-system-ink);
+}
+
+/* A tiny caret while a reply types out. */
+.hal-line__text.is-typing::after {
+  content: "_";
+  animation: hal-caret 1s steps(1) infinite;
+}
+
+@keyframes hal-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* --------------------------------------------------------------- progress */
+
+.hal-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.hal-progress-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: #000;
+  white-space: nowrap;
+}
+
+.hal-progress .progress-indicator {
+  flex: 1;
+  margin: 0;
+}
+
+.hal-progress .progress-indicator-bar {
+  transition: width 260ms linear;
+}
+
+/* ------------------------------------------------------------ input row */
+
+.hal-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.hal-input-row input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--hal-font);
+  font-size: 11px;
+  letter-spacing: 0;
+  -webkit-font-smoothing: none;
+}
+
+.hal-input-row button {
+  min-width: 60px;
+  font-size: 11px;
+  letter-spacing: 0;
+  word-spacing: 1px;
+}
+
+.hal-window button:disabled {
+  color: #808080;
+  text-shadow: 1px 1px 0 #fff;
+}
+
+/* --------------------------------------------------------------- status bar */
+
+.hal-window > .status-bar {
+  margin: 0;
+  display: flex;
+  gap: 2px;
+}
+
+.hal-window > .status-bar .status-bar-field {
+  flex: 1;
+  margin: 0;
+  font-size: 11px;
+}
+
+.hal-status-mood {
+  max-width: 130px;
+  text-align: right;
+}
+
+/* ----------------------------------------------------------------- modals */
+
+.hal-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+}
+
+.hal-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.hal-modal-window {
+  position: relative;
+  width: min(660px, calc(100vw - 24px));
+  max-height: calc(100dvh - 48px);
+  display: flex;
+  flex-direction: column;
+}
+
+.hal-modal-window > .window-body {
+  margin: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.hal-transcript {
+  margin: 0;
+  padding: 8px;
+  max-height: 52vh;
+  overflow: auto;
+  background: #fff;
+  border: 2px solid;
+  border-color: #808080 #fff #fff #808080;
+  font-family: "Lucida Console", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hal-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin: 0;
+}
+
+.hal-modal-actions button {
+  min-width: 76px;
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+/* ------------------------------------------------------------------ paint */
+
+.hal-paint-canvas {
+  min-height: 240px;
+  max-height: 56vh;
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  overflow: auto;
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, #d8d8d8 25%, transparent 25%),
+    linear-gradient(-45deg, #d8d8d8 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #d8d8d8 75%),
+    linear-gradient(-45deg, transparent 75%, #d8d8d8 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  border: 2px solid;
+  border-color: #808080 #fff #fff #808080;
+}
+
+.hal-paint-canvas img {
+  max-width: 100%;
+  max-height: 48vh;
+  image-rendering: pixelated;
+  border: 1px solid #000;
+  background: #fff;
+}
+
+.hal-render {
+  width: min(320px, 100%);
+  text-align: center;
+}
+
+.hal-render-label {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.hal-paint-error {
+  margin: 0;
+  max-width: 100%;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--hal-system-ink);
+  text-align: center;
+  white-space: pre-wrap;
+}
+
+.hal-caption {
+  margin: 0;
+  font-size: 12px;
+  font-style: italic;
+  text-align: center;
+  color: #303030;
+}
+
+/* ------------------------------------------------------------- boot screen */
+
+.hal-boot {
+  position: fixed;
+  inset: 0;
+  z-index: 8000;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  padding: clamp(16px, 5vw, 48px);
+  overflow: auto;
+  background: var(--hal-screen);
+  color: var(--hal-screen-ink);
+  font-family: "Lucida Console", "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.hal-boot-text {
+  margin: 0;
+  font: inherit;
+  white-space: pre-wrap;
+  text-shadow: 0 0 6px rgba(120, 255, 160, 0.35);
+}
+
+.hal-boot-note {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0;
+  color: #7f9a7f;
+}
+
+.hal-boot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hal-boot-actions button {
+  cursor: pointer;
+}
+
+/* -------------------------------------------------------------------- CRT */
+
+/* pointer-events: none is mandatory: the overlay sits above the entire UI. */
+.hal-crt {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--hal-crt-line) 0 1px,
+    transparent 1px 3px
+  );
+  animation: hal-flicker 7s steps(1) infinite;
+}
+
+.hal-crt::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 62%,
+    rgba(0, 0, 0, 0.16) 100%
+  );
+}
+
+@keyframes hal-flicker {
+  0%,
+  96%,
+  100% {
+    opacity: 1;
+  }
+  97% {
+    opacity: 0.82;
+  }
+  98% {
+    opacity: 0.95;
+  }
+  99% {
+    opacity: 0.78;
+  }
+}
+
+.hal-paint-window.is-shaking {
+  animation: hal-shake 220ms steps(2) 2;
+}
+
+@keyframes hal-shake {
+  25% {
+    transform: translateX(-4px);
+  }
+  75% {
+    transform: translateX(4px);
+  }
+}
+
+/* --------------------------------------------------------------- responsive */
+
+@media (max-width: 640px) {
+  .hal-desktop {
+    padding: 8px;
+  }
+
+  .hal-window {
+    max-height: calc(100dvh - 16px);
+  }
+
+  .hal-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .hal-avatar-pane {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "avatar name mood";
+    align-items: center;
+    gap: 8px;
+  }
+
+  .hal-avatar-frame {
+    grid-area: avatar;
+    width: 84px;
+  }
+
+  .hal-nameplate {
+    grid-area: name;
+    text-align: left;
+    padding: 4px 6px;
+  }
+
+  .hal-mood-label {
+    grid-area: mood;
+    text-align: right;
+  }
+
+  .hal-log {
+    min-height: 180px;
+    max-height: none;
+  }
+
+  .hal-toolbar button {
+    min-width: 0;
+    flex: 1;
+    padding: 3px 4px;
+  }
+
+  .hal-toolbar-spacer {
+    display: none;
+  }
+
+  .hal-status-mood {
+    max-width: 112px;
+  }
+
+  .hal-input-row button {
+    min-width: 52px;
+  }
+}
+
+@media (max-width: 380px) {
+  .hal-nameplate {
+    font-size: 10px;
+  }
+
+  .hal-mood-label {
+    font-size: 10px;
+  }
+
+  .hal-toolbar {
+    padding: 3px;
+  }
+
+  .hal-boot {
+    font-size: 11px;
+  }
+}
+
+/* --------------------------------------------------------- large screens
+   Zoom scales layout, not just paint, so the window stays centred and the
+   height cap is divided by the same factor. 1.5 keeps the pixel font on a
+   half-pixel grid and image-rendering: pixelated does the rest.
+   ---------------------------------------------------------------------- */
+
+@media (min-width: 1201px) {
+  .hal-desktop {
+    padding: 8px;
+  }
+
+  .hal-window {
+    zoom: 1.5;
+    max-height: calc((100dvh - 16px) / 1.5);
+  }
+}
+
+/* Short laptop panels: shrink the furniture before anything can clip. */
+@media (max-height: 620px) and (min-width: 641px) {
+  .hal-body {
+    grid-template-columns: 132px minmax(0, 1fr);
+  }
+
+  .hal-log {
+    min-height: 150px;
+    max-height: none;
+  }
+
+  .hal-nameplate,
+  .hal-mood-label {
+    font-size: 10px;
+  }
+}
+
+@media (max-height: 460px) {
+  .hal-avatar-pane {
+    display: none;
+  }
+
+  .hal-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hal-log {
+    min-height: 120px;
+    max-height: none;
+  }
+}
+
+/* --------------------------------------------------- reduced motion / contrast */
+
+@media (prefers-reduced-motion: reduce) {
+  .hal-crt {
+    animation: none;
+  }
+
+  .hal-line__text.is-typing::after {
+    animation: none;
+  }
+
+  .hal-progress .progress-indicator-bar,
+  .hal-paint-window.is-shaking {
+    transition: none;
+    animation: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .hal-line--bot .hal-line__who {
+    color: #000;
+    text-decoration: underline;
+  }
+
+  .hal-log {
+    border: 2px solid #000;
+  }
+}
