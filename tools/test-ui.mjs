@@ -34,8 +34,10 @@ page.on("console", (message) => {
 });
 page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
 page.on("requestfailed", (request) => {
-  if (request.url().endsWith("/draw")) return;
-  errors.push(`requestfailed: ${request.url()} ${request.failure()?.errorText ?? ""}`);
+  const reason = request.failure()?.errorText ?? "";
+  // Aborts are normal when the test navigates while an image is loading.
+  if (request.url().endsWith("/draw") || reason === "net::ERR_ABORTED") return;
+  errors.push(`requestfailed: ${request.url()} ${reason}`);
 });
 
 try {
