@@ -1,0 +1,13 @@
+# Local Worker secrets (never commit)
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+
+# Wrangler build/cache state
+.wrangler/
+node_modules/
+
+# OS noise
+.DS_Store
+Thumbs.db
