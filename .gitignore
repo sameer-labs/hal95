@@ -8,6 +8,10 @@
 .wrangler/
 node_modules/
 
+# Test artefacts
+docs/failure.png
+test-results/
+
 # OS noise
 .DS_Store
 Thumbs.db
