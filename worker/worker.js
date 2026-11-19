@@ -7,17 +7,21 @@
  *   2. rate limits per IP (KV) and globally per day (KV)
  *   3. injects HAL95's persona server-side
  *   4. calls DeepSeek with a hard output cap
- *   5. returns { reply } (or a base64 image from POST /draw)
+ *   5. returns { reply } from POST /, or a sanitised SVG from POST /draw
+ *
+ * Both routes use DeepSeek: the chat route asks for a persona reply, the draw
+ * route asks the same model to pretend it is a terrible 1998 paint program.
+ * Model output is never trusted: the SVG is rebuilt from a shape whitelist.
  *
  * Secrets (set with `wrangler secret put`, never committed):
- *   DEEPSEEK_API_KEY     — DeepSeek chat completions
- *   HUGGINGFACE_API_KEY  — Hugging Face Inference Providers (image route)
+ *   DEEPSEEK_API_KEY     — DeepSeek chat completions (chat and drawing)
  *
  * KV binding (see wrangler.toml):
  *   RATE_LIMIT           — counters shared across isolates
  */
 
 import { HAL95_SYSTEM_PROMPT } from "../js/persona.js";
+import { parseDrawResponse } from "./sanitize.js";
 
 /* ==========================================================================
  * CONFIGURATION
@@ -33,9 +37,11 @@ const ALLOWED_ORIGINS = [
   "https://sameer-labs.github.io",
 ];
 
-const RATE_LIMIT_MAX = 20; // requests per IP…
+const RATE_LIMIT_MAX = 20; // chat requests per IP…
+const DRAW_RATE_LIMIT_MAX = 5; // …drawings per IP…
 const RATE_LIMIT_WINDOW_MS = 60_000; // …per minute
 const GLOBAL_DAILY_MAX = 1_500; // all requests, all IPs, per UTC day
+const DRAW_DAILY_WEIGHT = 2; // drawings are ~2× the spend of a chat reply
 
 const MAX_HISTORY_MESSAGES = 10;
 const MAX_INPUT_CHARS = 300;
@@ -49,24 +55,59 @@ const DEEPSEEK_MODEL = "deepseek-flash";
 const DEEPSEEK_TIMEOUT_MS = 20_000;
 
 /**
- * Image provider. As of Nov 2026 this is the only text-to-image model mapped to
- * the `hf-inference` provider (verified with the Hugging Face model API). It is
- * gated: the Hugging Face account must accept the SD3 licence and the token
- * must have Inference Providers write permission, otherwise the router returns
- * 403. The request body follows the HF `{ inputs, parameters, options }` shape.
+ * Drawing uses the same text model as chat, with a completely separate prompt
+ * and token budget. One retry covers a malformed or empty SVG; two attempts at
+ * 35 seconds still fit inside the browser's 75-second request timeout.
  */
-const IMAGE_PROVIDER_URL =
-  "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-3-medium-diffusers";
-const IMAGE_MODEL = "stabilityai/stable-diffusion-3-medium-diffusers";
-const IMAGE_SECRET_NAME = "HUGGINGFACE_API_KEY";
-const IMAGE_TIMEOUT_MS = 60_000;
-const MAX_DRAW_PROMPT_CHARS = 200;
+const DRAW_TIMEOUT_MS = 35_000;
+const DRAW_ATTEMPTS = 2;
+const MAX_DRAW_PROMPT_CHARS = 100;
+const MAX_DRAW_TOKENS = 900;
+const MAX_DRAW_REPLY_CHARS = 32_000; // guard before the sanitiser's 8 KB cap
 
-/** Style cues that keep the drawing deliberately crude, not impressive. */
-const DRAW_STYLE_PREFIX =
-  "badly drawn, childlike scribble, MS Paint style, wobbly lines, flat colours, crude, no shading";
+/**
+ * The artist is deliberately bad. Every rule below exists to stop the model
+ * drifting into clean illustration: fixed canvas, few shapes, thick wobbly
+ * outlines, flat colours that miss their own edges, and a short caption.
+ * The sanitizer accepts only shape elements, so text inside the SVG is dropped
+ * even if the model ignores the instruction.
+ */
+const DRAW_SYSTEM_PROMPT = `You are HAL95's drawing module: a cheap 1998 paint program operated by a machine that has never seen the thing it is drawing. You draw deliberately badly. The result should be crude, childlike and only just recognisable, like an MS Paint sketch made with a mouse that sticks.
 
-const MAX_IMAGE_BYTES = 2_000_000; // keep the Worker response comfortably small
+OUTPUT RULES
+- Return ONLY the SVG document, then a single newline, then one line starting exactly with "CAPTION:".
+- No markdown fences, no commentary, no explanations.
+- Root element: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240" width="320" height="240">
+- The first child MUST be <rect x="0" y="0" width="320" height="240" fill="#ffffff"/>
+- Use 6 to 14 shape elements in total, including the white background rect.
+- Allowed elements only: rect, circle, ellipse, line, polyline, polygon, path.
+- Never use text, style, script, image, foreignObject, href, xlink, filters or external references.
+- Outlines: stroke="#000000" with stroke-width between 4 and 8, stroke-linecap="round", stroke-linejoin="round". Lines should be crooked, not straight.
+- Colour: flat bright fills only (#e02020, #2050e0, #f0d000, #20a040, #f08020) and let some colour spill past an outline.
+- Proportions must be wrong. Parts can float, overlap or point the wrong way. The subject must still be identifiable after a second of squinting.
+- Keep every shape roughly inside the 320x240 canvas.
+- CAPTION: at most 6 words, plain uppercase text, no quotes, no explanation of quality.
+
+EXAMPLE 1
+User: Draw: a horse
+Assistant:
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240" width="320" height="240"><rect x="0" y="0" width="320" height="240" fill="#ffffff"/><ellipse cx="150" cy="140" rx="80" ry="40" fill="#e02020" stroke="#000000" stroke-width="6"/><line x1="100" y1="160" x2="88" y2="212" stroke="#000000" stroke-width="7" stroke-linecap="round"/><line x1="130" y1="170" x2="126" y2="216" stroke="#000000" stroke-width="7" stroke-linecap="round"/><line x1="180" y1="170" x2="184" y2="214" stroke="#000000" stroke-width="7" stroke-linecap="round"/><line x1="206" y1="158" x2="216" y2="208" stroke="#000000" stroke-width="7" stroke-linecap="round"/><path d="M222 132 L264 88 L278 120 L244 150 Z" fill="#e02020" stroke="#000000" stroke-width="6" stroke-linejoin="round"/><circle cx="252" cy="108" r="4" fill="#000000"/><path d="M72 124 L40 96 L44 132" fill="none" stroke="#000000" stroke-width="6" stroke-linecap="round"/></svg>
+CAPTION: HORSE. PROBABLY.
+
+EXAMPLE 2
+User: Draw: a rocket
+Assistant:
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240" width="320" height="240"><rect x="0" y="0" width="320" height="240" fill="#ffffff"/><path d="M160 24 C128 64 130 138 142 182 L178 182 C192 136 192 66 160 24 Z" fill="#d0d0d0" stroke="#000000" stroke-width="6" stroke-linejoin="round"/><circle cx="160" cy="92" r="20" fill="#2050e0" stroke="#000000" stroke-width="5"/><polygon points="140,172 160,228 182,172" fill="#f08020" stroke="#000000" stroke-width="5" stroke-linejoin="round"/><path d="M136 158 L106 202 L142 192" fill="#e02020" stroke="#000000" stroke-width="5" stroke-linejoin="round"/><path d="M184 158 L214 202 L178 192" fill="#e02020" stroke="#000000" stroke-width="5" stroke-linejoin="round"/></svg>
+CAPTION: IT GOES UP.
+
+EXAMPLE 3
+User: Draw: my mum
+Assistant:
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240" width="320" height="240"><rect x="0" y="0" width="320" height="240" fill="#ffffff"/><circle cx="160" cy="98" r="46" fill="#f0c0a0" stroke="#000000" stroke-width="6"/><circle cx="144" cy="90" r="4" fill="#000000"/><circle cx="178" cy="88" r="5" fill="#000000"/><path d="M146 118 Q160 132 178 116" fill="none" stroke="#000000" stroke-width="5" stroke-linecap="round"/><path d="M114 62 Q160 10 208 64" fill="none" stroke="#7a4a20" stroke-width="9" stroke-linecap="round"/><path d="M122 150 L98 228 L222 228 L198 150 Z" fill="#2050e0" stroke="#000000" stroke-width="6" stroke-linejoin="round"/></svg>
+CAPTION: SHE IS TALLER THAN THIS.
+
+Now draw the requested subject in the same style.`;
+
 
 /** Generic, in-character failures. Real upstream detail only ever hits logs. */
 const ERRORS = {
@@ -144,24 +185,25 @@ function secondsUntilNextMinute() {
   return Math.max(1, 60 - (Math.floor(Date.now() / 1000) % 60));
 }
 
-function checkMemoryRateLimit(ip) {
+function checkMemoryRateLimit(ip, max, scope) {
   const now = Date.now();
+  const key = `${scope}:${ip}`;
 
   // Opportunistic cleanup so the map cannot grow forever in a hot isolate.
   if (buckets.size > 5_000) {
-    for (const [key, bucket] of buckets) {
-      if (now - bucket.windowStart >= RATE_LIMIT_WINDOW_MS) buckets.delete(key);
+    for (const [bucketKey, bucket] of buckets) {
+      if (now - bucket.windowStart >= RATE_LIMIT_WINDOW_MS) buckets.delete(bucketKey);
     }
   }
 
-  const bucket = buckets.get(ip);
+  const bucket = buckets.get(key);
 
   if (!bucket || now - bucket.windowStart >= RATE_LIMIT_WINDOW_MS) {
-    buckets.set(ip, { windowStart: now, count: 1 });
+    buckets.set(key, { windowStart: now, count: 1 });
     return { allowed: true, retryAfter: 0 };
   }
 
-  if (bucket.count >= RATE_LIMIT_MAX) {
+  if (bucket.count >= max) {
     return {
       allowed: false,
       scope: "ip",
@@ -176,10 +218,10 @@ function checkMemoryRateLimit(ip) {
   return { allowed: true, retryAfter: 0 };
 }
 
-function checkMemoryDaily() {
+function checkMemoryDaily(weight) {
   const day = utcDay();
   if (memoryDay.day !== day) memoryDay = { day, count: 0 };
-  memoryDay.count += 1;
+  memoryDay.count += weight;
 
   if (memoryDay.count > GLOBAL_DAILY_MAX) {
     return {
@@ -192,30 +234,36 @@ function checkMemoryDaily() {
   return { allowed: true, retryAfter: 0 };
 }
 
-async function incrementKv(env, key, expirationTtl) {
+async function incrementKv(env, key, expirationTtl, by = 1) {
   const current = Number(await env.RATE_LIMIT.get(key)) || 0;
-  const next = current + 1;
+  const next = current + by;
   await env.RATE_LIMIT.put(key, String(next), { expirationTtl });
   return next;
 }
 
-async function checkRateLimit(env, ip) {
+async function checkRateLimit(env, ip, { draw = false } = {}) {
+  const scope = draw ? "draw" : "chat";
+  const ipMax = draw ? DRAW_RATE_LIMIT_MAX : RATE_LIMIT_MAX;
+  const weight = draw ? DRAW_DAILY_WEIGHT : 1;
+
   // Always run the in-isolate counters. KV propagation can lag by up to a
   // minute, so this is what makes a rapid burst fail fast on one isolate.
-  const memory = checkMemoryRateLimit(ip);
+  const memory = checkMemoryRateLimit(ip, ipMax, scope);
   if (!memory.allowed) return memory;
 
-  const dailyMemory = checkMemoryDaily();
+  const dailyMemory = checkMemoryDaily(weight);
   if (!dailyMemory.allowed) return dailyMemory;
 
   if (env.RATE_LIMIT) {
     try {
       const day = utcDay();
       const globalKey = `rl:global:${day}`;
-      const ipKey = `rl:ip:${ip}:${Math.floor(Date.now() / RATE_LIMIT_WINDOW_MS)}`;
+      const ipKey =
+        `rl:${scope}:${ip}:${Math.floor(Date.now() / RATE_LIMIT_WINDOW_MS)}`;
 
       // Count every accepted request against the daily spend guard first.
-      const globalCount = await incrementKv(env, globalKey, 172_800);
+      // Drawings cost more, so they consume two units of the daily budget.
+      const globalCount = await incrementKv(env, globalKey, 172_800, weight);
       if (globalCount > GLOBAL_DAILY_MAX) {
         return {
           allowed: false,
@@ -225,7 +273,7 @@ async function checkRateLimit(env, ip) {
       }
 
       const ipCount = await incrementKv(env, ipKey, 120);
-      if (ipCount > RATE_LIMIT_MAX) {
+      if (ipCount > ipMax) {
         return {
           allowed: false,
           scope: "ip",
@@ -314,19 +362,6 @@ function validateMessages(raw) {
   return { messages };
 }
 
-function base64Encode(buffer) {
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 0x8000;
-  let binary = "";
-
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    const chunk = bytes.subarray(offset, offset + chunkSize);
-    binary += String.fromCharCode.apply(null, chunk);
-  }
-
-  return btoa(binary);
-}
-
 function rateLimitReply(limit, origin) {
   const message =
     limit.scope === "global" ? ERRORS.busyTomorrow : ERRORS.busy;
@@ -412,9 +447,8 @@ async function handleChat(request, env, origin) {
 }
 
 async function handleDraw(request, env, origin) {
-  const token = env[IMAGE_SECRET_NAME];
-  if (!token) {
-    console.error(`HAL95: ${IMAGE_SECRET_NAME} is not configured`);
+  if (!env.DEEPSEEK_API_KEY) {
+    console.error("HAL95: DEEPSEEK_API_KEY is not configured");
     return json({ error: ERRORS.image }, 500, origin);
   }
 
@@ -426,74 +460,85 @@ async function handleDraw(request, env, origin) {
     return json({ error: ERRORS.corrupt }, 400, origin);
   }
 
-  const prompt = rawPrompt.trim();
+  const prompt = rawPrompt.replace(/\s+/g, " ").trim();
   if (prompt.length === 0 || prompt.length > MAX_DRAW_PROMPT_CHARS) {
     return json({ error: ERRORS.corrupt }, 400, origin);
   }
 
-  const styledPrompt = `${prompt}, ${DRAW_STYLE_PREFIX}`;
+  for (let attempt = 0; attempt < DRAW_ATTEMPTS; attempt += 1) {
+    const reminder =
+      attempt === 0
+        ? ""
+        : "\n\nYour previous file was corrupt. Return only a valid SVG, then one CAPTION line.";
 
-  let upstream;
-  try {
-    upstream = await fetch(IMAGE_PROVIDER_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        Accept: "image/png",
-      },
-      body: JSON.stringify({
-        inputs: styledPrompt,
-        parameters: {
-          negative_prompt: "photorealistic, highly detailed, professional, masterpiece",
-          num_inference_steps: 20,
-          guidance_scale: 7,
-          width: 512,
-          height: 512,
+    let upstream;
+    try {
+      upstream = await fetch(DEEPSEEK_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${env.DEEPSEEK_API_KEY}`,
         },
-        options: { wait_for_model: true },
-      }),
-      signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS),
-    });
-  } catch (error) {
-    console.error("HAL95: image request failed", error?.name ?? "unknown");
-    return json({ error: ERRORS.image }, 504, origin);
+        body: JSON.stringify({
+          model: DEEPSEEK_MODEL,
+          messages: [
+            { role: "system", content: DRAW_SYSTEM_PROMPT },
+            { role: "user", content: `Draw: ${prompt}${reminder}` },
+          ],
+          thinking: { type: "disabled" },
+          max_tokens: MAX_DRAW_TOKENS,
+          temperature: 1.0,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(DRAW_TIMEOUT_MS),
+      });
+    } catch (error) {
+      console.error("HAL95: draw request failed", error?.name ?? "unknown", attempt);
+      continue;
+    }
+
+    if (upstream.status === 429) {
+      console.error("HAL95: DeepSeek rate limited the draw route");
+      return json({ error: ERRORS.busy }, 429, origin);
+    }
+
+    if (!upstream.ok) {
+      console.error("HAL95: DeepSeek draw responded", upstream.status, attempt);
+      continue;
+    }
+
+    let data;
+    try {
+      data = await upstream.json();
+    } catch {
+      console.error("HAL95: draw response was not JSON", attempt);
+      continue;
+    }
+
+    const raw = data?.choices?.[0]?.message?.content;
+    if (typeof raw !== "string" || raw.length > MAX_DRAW_REPLY_CHARS) {
+      console.error("HAL95: draw response was missing or oversized", attempt);
+      continue;
+    }
+
+    const drawing = parseDrawResponse(raw);
+    if (drawing.error) {
+      console.error("HAL95: draw response rejected", drawing.error, attempt);
+      continue;
+    }
+
+    return json(
+      {
+        svg: drawing.svg,
+        caption: drawing.caption,
+        prompt,
+      },
+      200,
+      origin,
+    );
   }
 
-  if (!upstream.ok) {
-    console.error("HAL95: image provider responded", upstream.status, IMAGE_MODEL);
-    return json({ error: ERRORS.image }, upstream.status === 503 ? 503 : 502, origin);
-  }
-
-  const contentType = upstream.headers.get("Content-Type") ?? "";
-  if (!contentType.startsWith("image/")) {
-    // Hugging Face returns JSON when the model is loading or the token is bad.
-    console.error("HAL95: unexpected image content type", contentType);
-    return json({ error: ERRORS.image }, 502, origin);
-  }
-
-  let buffer;
-  try {
-    buffer = await upstream.arrayBuffer();
-  } catch {
-    console.error("HAL95: image body could not be read");
-    return json({ error: ERRORS.image }, 502, origin);
-  }
-
-  if (buffer.byteLength === 0 || buffer.byteLength > MAX_IMAGE_BYTES) {
-    console.error("HAL95: image size rejected", buffer.byteLength);
-    return json({ error: ERRORS.image }, 502, origin);
-  }
-
-  return json(
-    {
-      image: base64Encode(buffer),
-      mimeType: contentType.split(";")[0].trim(),
-      prompt,
-    },
-    200,
-    origin,
-  );
+  return json({ error: ERRORS.image }, 502, origin);
 }
 
 /* ==========================================================================
@@ -527,18 +572,19 @@ export default {
       return json({ error: ERRORS.corrupt }, 400, origin);
     }
 
+    const path = new URL(request.url).pathname.replace(/\/+$/, "") || "/";
+    if (path !== "/" && path !== "/draw") {
+      return json({ error: ERRORS.notFound }, 404, origin);
+    }
+
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
-    const limit = await checkRateLimit(env, ip);
+    const limit = await checkRateLimit(env, ip, { draw: path === "/draw" });
     if (!limit.allowed) {
-      console.error("HAL95: rate limited", limit.scope);
+      console.error("HAL95: rate limited", limit.scope, path);
       return rateLimitReply(limit, origin);
     }
 
-    const path = new URL(request.url).pathname.replace(/\/+$/, "") || "/";
-
     if (path === "/draw") return handleDraw(request, env, origin);
-    if (path === "/") return handleChat(request, env, origin);
-
-    return json({ error: ERRORS.notFound }, 404, origin);
+    return handleChat(request, env, origin);
   },
 };

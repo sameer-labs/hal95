@@ -3,9 +3,8 @@
 # Wrangler bundles worker.js together with the persona imported from
 # ../js/persona.js, so the system prompt exists in exactly one place.
 #
-# Secrets are NOT stored here. Set them once with:
+# Secrets are NOT stored here. Set the one secret once with:
 #   wrangler secret put DEEPSEEK_API_KEY
-#   wrangler secret put HUGGINGFACE_API_KEY
 #
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
 
@@ -21,7 +20,8 @@ workers_dev = true
 #   { pattern = "api.example.com/*", custom_domain = true }
 # ]
 
-# Durable, cross-isolate rate limiting (20/IP/minute + 1,500/day globally).
+# Durable, cross-isolate rate limiting (20 chat/min + 5 draws/min per IP,
+# 1,500 weighted units per UTC day globally; a drawing weighs two units).
 # Created with: wrangler kv namespace create RATE_LIMIT
 [[kv_namespaces]]
 binding = "RATE_LIMIT"

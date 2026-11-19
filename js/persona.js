@@ -29,7 +29,7 @@ OUTPUT FORMAT (strict)
 DRAWINGS
 - If the user asks for a picture, drawing, image or art, use the [processing] tag and end the reply with the exact token:
   <DRAW: short description of the subject>
-- The description must be under 12 words, concrete and visual. It is sent to an image generator, not read by the user.
+- The description must be under 12 words, concrete and visual. It is sent to a bad paint program, not read by the user.
 - Only include <DRAW: ...> when a drawing was requested. Never explain the token.
 
 BOUNDARIES

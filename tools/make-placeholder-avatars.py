@@ -116,6 +116,15 @@ def make_processing():
     return img
 
 
+def make_blink():
+    img, d = base()
+    # Closed-eye frame: two flat lines under the glasses.
+    d.line((182, 224, 230, 224), fill=BLACK, width=8)
+    d.line((290, 224, 338, 224), fill=BLACK, width=8)
+    mouth_neutral(d)
+    return img
+
+
 def make_creepy():
     img, d = base()
     # Narrowed eyes with red pinprick pupils.
@@ -145,6 +154,7 @@ def main():
     save("confused", make_confused())
     save("processing", make_processing())
     save("creepy", make_creepy())
+    save("blink", make_blink())
 
 
 if __name__ == "__main__":

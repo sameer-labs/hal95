@@ -73,19 +73,137 @@ body {
 /* --------------------------------------------------------------- desktop */
 
 .hal-desktop {
+  position: relative;
   min-height: 100vh;
   min-height: 100dvh;
   display: grid;
   place-items: center;
-  padding: 16px;
+  padding: 16px 16px 64px;
   overflow-y: auto;
 }
 
 .hal-window {
   width: min(var(--hal-window-width), 100%);
-  max-height: calc(100dvh - 32px);
+  max-height: calc(100dvh - 100px);
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+.hal-window.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+/* Desktop shortcut column. Hidden when the window would collide with it. */
+.hal-icons {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 76px;
+}
+
+.hal-icon {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 2px;
+  border: 1px dotted transparent;
+  background: transparent;
+  color: #fff;
+  font-family: var(--hal-font);
+  font-size: 10px;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+  text-shadow: 1px 1px 0 #000;
+}
+
+.hal-icon:hover {
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.hal-icon:focus-visible {
+  outline: none;
+  border-color: #fff;
+}
+
+.hal-icon__label {
+  overflow-wrap: anywhere;
+}
+
+.hal-icon__art {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  display: block;
+  image-rendering: pixelated;
+}
+
+.hal-icon__art--doc {
+  background: #fff;
+  border: 2px solid #000;
+  box-shadow: inset 0 -8px 0 #c0c0c0;
+}
+
+.hal-icon__art--doc::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  right: 5px;
+  height: 2px;
+  background: #000080;
+  box-shadow: 0 5px 0 #000080, 0 10px 0 #000080;
+}
+
+.hal-icon__art--bin {
+  background:
+    linear-gradient(#c0c0c0, #c0c0c0) 5px 9px / 22px 21px no-repeat,
+    linear-gradient(#808080, #808080) 3px 5px / 26px 4px no-repeat;
+  border: 2px solid #000;
+  border-top: 0;
+}
+
+.hal-icon__art--bin::after {
+  content: "";
+  position: absolute;
+  top: 14px;
+  left: 11px;
+  width: 2px;
+  height: 12px;
+  background: #000;
+  box-shadow: 5px 0 0 #000, 10px 0 0 #000;
+}
+
+.hal-icon__art--face {
+  background: #000080;
+  border: 2px solid #000;
+}
+
+.hal-icon__art--face::before {
+  content: "";
+  position: absolute;
+  inset: 5px 5px 10px;
+  background: #c0c0c0;
+}
+
+.hal-icon__art--face::after {
+  content: "";
+  position: absolute;
+  top: 11px;
+  left: 10px;
+  width: 3px;
+  height: 3px;
+  background: #000;
+  box-shadow: 9px 0 0 #000, 4px 7px 0 0 #000;
 }
 
 .hal-window > .window-body {
@@ -160,6 +278,46 @@ body {
   image-rendering: pixelated;
   image-rendering: crisp-edges;
   filter: saturate(0.85) contrast(1.05);
+  transform-origin: 50% 85%;
+  animation: hal-breathe 5.5s ease-in-out infinite;
+}
+
+/* A slow drift on the frame, plus a breath on the face. Both are decorative. */
+.hal-avatar-frame {
+  animation: hal-drift 11s ease-in-out infinite alternate;
+}
+
+@keyframes hal-breathe {
+  0%,
+  100% {
+    transform: scale(1) translateY(0);
+  }
+  50% {
+    transform: scale(1.012) translateY(-1px);
+  }
+}
+
+@keyframes hal-drift {
+  0% {
+    transform: translate(0, 0) rotate(-0.25deg);
+  }
+  100% {
+    transform: translate(1px, -1px) rotate(0.25deg);
+  }
+}
+
+/* 120ms creepy flash, triggered rarely by app.js. */
+body.hal-flash::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  pointer-events: none;
+  background: rgba(130, 0, 0, 0.28);
+}
+
+.hal-avatar-frame.is-glitching img {
+  filter: invert(1) contrast(1.4);
 }
 
 /* Visible reminder when the supplied avatar PNG has not been added yet. */
@@ -369,6 +527,119 @@ body {
   text-align: right;
 }
 
+/* --------------------------------------------------------------- taskbar */
+
+.hal-taskbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 36px;
+  padding: 3px 4px;
+  background: #c0c0c0;
+  border-top: 1px solid #fff;
+  box-shadow: inset 0 1px 0 #dfdfdf, 0 -1px 0 #808080;
+  font-family: var(--hal-font);
+  font-size: 11px;
+}
+
+.hal-taskbar button {
+  font-family: var(--hal-font);
+  font-size: 11px;
+  letter-spacing: 0;
+  word-spacing: 1px;
+}
+
+.hal-start {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 58px;
+  padding: 3px 7px;
+  font-weight: 700;
+}
+
+.hal-start__logo {
+  width: 14px;
+  height: 14px;
+  background:
+    linear-gradient(90deg, #e02020 0 50%, #20a040 50% 100%) top / 100% 50% no-repeat,
+    linear-gradient(90deg, #2050e0 0 50%, #f0d000 50% 100%) bottom / 100% 50% no-repeat;
+  border: 1px solid #000;
+}
+
+.hal-start-menu {
+  position: absolute;
+  left: 4px;
+  bottom: calc(100% + 2px);
+  z-index: 4100;
+  min-width: 154px;
+  padding: 2px;
+  background: #c0c0c0;
+  border: 2px solid;
+  border-color: #fff #000 #000 #fff;
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.35);
+}
+
+.hal-start-menu button {
+  display: block;
+  width: 100%;
+  padding: 4px 10px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.hal-start-menu button:hover,
+.hal-start-menu button:focus-visible {
+  background: #000080;
+  color: #fff;
+  outline: none;
+}
+
+.hal-taskbar-divider {
+  width: 2px;
+  align-self: stretch;
+  margin: 2px 1px;
+  border-left: 1px solid #808080;
+  border-right: 1px solid #fff;
+}
+
+.hal-task-button {
+  min-width: 92px;
+  max-width: 160px;
+  padding: 4px 8px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hal-task-button.is-active {
+  border-color: #000 #fff #fff #000;
+  box-shadow: inset 1px 1px 0 #808080;
+  background:
+    repeating-linear-gradient(45deg, #c0c0c0 0 2px, #b8b8b8 2px 4px);
+}
+
+.hal-taskbar-spacer {
+  flex: 1;
+}
+
+.hal-clock {
+  min-width: 68px;
+  padding: 3px 6px;
+  text-align: center;
+  border: 1px solid;
+  border-color: #808080 #fff #fff #808080;
+  white-space: nowrap;
+}
+
 /* ----------------------------------------------------------------- modals */
 
 .hal-modal {
@@ -457,6 +728,17 @@ body {
   image-rendering: pixelated;
   border: 1px solid #000;
   background: #fff;
+  animation: hal-paint-wobble 3.4s steps(2) infinite;
+}
+
+@keyframes hal-paint-wobble {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(-0.15deg);
+  }
+  50% {
+    transform: translate(0.5px, -0.5px) rotate(0.15deg);
+  }
 }
 
 .hal-render {
@@ -486,6 +768,38 @@ body {
   font-style: italic;
   text-align: center;
   color: #303030;
+}
+
+.hal-paint-made {
+  margin: -4px 0 0;
+  font-size: 11px;
+  text-align: center;
+  color: #606060;
+}
+
+.hal-info-text {
+  margin: 0;
+  padding: 10px;
+  max-height: 52vh;
+  overflow: auto;
+  background: #fff;
+  border: 2px solid;
+  border-color: #808080 #fff #fff #808080;
+  font-family: "Lucida Console", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hal-recycle-window {
+  width: min(430px, calc(100vw - 24px));
+}
+
+.hal-recycle-window .hal-info-text {
+  font-family: var(--hal-font);
+  font-size: 12px;
+  text-align: center;
 }
 
 /* ------------------------------------------------------------- boot screen */
@@ -592,13 +906,40 @@ body {
 
 /* --------------------------------------------------------------- responsive */
 
+@media (max-width: 980px) {
+  .hal-icons {
+    display: none;
+  }
+}
+
 @media (max-width: 640px) {
   .hal-desktop {
-    padding: 8px;
+    padding: 8px 8px 58px;
   }
 
   .hal-window {
-    max-height: calc(100dvh - 16px);
+    max-height: calc(100dvh - 76px);
+  }
+
+  .hal-taskbar {
+    min-height: 32px;
+    padding: 2px 3px;
+  }
+
+  .hal-start {
+    min-width: 52px;
+    padding: 3px 5px;
+  }
+
+  .hal-task-button {
+    min-width: 0;
+    max-width: 108px;
+    padding: 3px 6px;
+  }
+
+  .hal-clock {
+    min-width: 56px;
+    padding: 3px 4px;
   }
 
   .hal-body {
@@ -688,7 +1029,7 @@ body {
 
   .hal-window {
     zoom: 1.5;
-    max-height: calc((100dvh - 16px) / 1.5);
+    max-height: calc((100dvh - 76px) / 1.5);
   }
 }
 
@@ -739,6 +1080,16 @@ body {
   .hal-paint-window.is-shaking {
     transition: none;
     animation: none;
+  }
+
+  .hal-avatar-frame,
+  .hal-avatar-frame img,
+  .hal-paint-canvas img {
+    animation: none;
+  }
+
+  body.hal-flash::after {
+    display: none;
   }
 }
 

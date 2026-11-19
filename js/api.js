@@ -16,7 +16,7 @@
 export const WORKER_URL = "https://hal95-worker.sameer0ayat.workers.dev";
 
 const TEXT_TIMEOUT_MS = 20_000;
-const DRAW_TIMEOUT_MS = 75_000;
+const DRAW_TIMEOUT_MS = 75_000; // two 35s Worker attempts fit inside this
 const RETRY_DELAY_MS = 600;
 const MAX_MESSAGES = 10;
 const MAX_MESSAGE_CHARS = 300;
@@ -171,14 +171,16 @@ export async function sendMessage(history) {
 }
 
 /**
- * Ask for a drawing. Returns a data URL ready for an <img>.
- * Drawing retries are limited to transport errors: a 75s timeout repeated
- * once would leave the dialog open for two and a half minutes.
+ * Ask for a drawing. The Worker returns a sanitized SVG document plus a short
+ * caption. We wrap the SVG in a data URL so it can only ever load as an <img>:
+ * no inline markup, no script, no DOM injection.
+ * Drawing retries are limited to transport errors: a 75s timeout repeated once
+ * would leave the dialog open for two and a half minutes.
  * @param {string} prompt
- * @returns {Promise<string>}
+ * @returns {Promise<{dataUrl: string, caption: string, svg: string}>}
  */
 export async function requestDrawing(prompt) {
-  const clean = String(prompt ?? "").trim().slice(0, 200);
+  const clean = String(prompt ?? "").trim().slice(0, 100);
   if (!clean) {
     throw new ApiError("invalid", "Empty drawing prompt.");
   }
@@ -190,15 +192,19 @@ export async function requestDrawing(prompt) {
     { retryTimeouts: false },
   );
 
-  const image = typeof data?.image === "string" ? data.image : "";
-  if (!image) {
-    throw new ApiError("empty", "Worker returned no image.");
+  const svg = typeof data?.svg === "string" ? data.svg.trim() : "";
+  if (!svg.startsWith("<svg") || !svg.endsWith("</svg>")) {
+    throw new ApiError("empty", "Worker returned no drawing.");
   }
 
-  // Only ever trust an image mime type we already expect.
-  const mime = /^image\/(png|jpeg|webp)$/i.test(data?.mimeType ?? "")
-    ? data.mimeType
-    : "image/png";
+  const caption =
+    typeof data?.caption === "string" && data.caption.trim().length > 0
+      ? data.caption.trim().slice(0, 60)
+      : "";
 
-  return `data:${mime};base64,${image}`;
+  return {
+    dataUrl: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
+    caption,
+    svg,
+  };
 }

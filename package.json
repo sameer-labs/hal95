@@ -2,9 +2,12 @@
   "name": "hal95",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "HAL95 static site and Cloudflare Worker proxy",
   "scripts": {
-    "test:ui": "node tools/test-ui.mjs"
+    "test:ui": "node tools/test-ui.mjs",
+    "test:sanitizer": "node tools/test-sanitizer.mjs",
+    "draw:samples": "node tools/make-draw-samples.mjs"
   },
   "devDependencies": {
     "playwright": "^1.65.1"

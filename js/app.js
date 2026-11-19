@@ -27,6 +27,7 @@ import {
 const ASSETS = {
   avatarDir: "assets/avatar-states/",
   neutralAvatar: "assets/avatar-states/neutral.png",
+  blinkAvatar: "assets/avatar-states/blink.png",
   sounds: {
     dialup: "assets/sounds/dialup.mp3",
     keyclick: "assets/sounds/keyclick.mp3",
@@ -56,8 +57,17 @@ const PROCESSING_MIN_MS = 600;
 const PROCESSING_MAX_MS = 1_500;
 const TYPE_BASE_MS = 16;
 const TYPE_JITTER_MS = 22;
+const BLINK_MIN_MS = 3_500;
+const BLINK_MAX_MS = 8_500;
+const BLINK_CLOSED_MS = 120;
+const CREEPY_MIN_MS = 40_000;
+const CREEPY_MAX_MS = 90_000;
+const CREEPY_FLASH_MS = 120;
 const STORAGE_KEY_HISTORY = "hal95:history";
 const STORAGE_KEY_MUTED = "hal95:muted";
+const STORAGE_KEY_LAST_LOGIN = "hal95:lastLogin";
+const DEFAULT_TITLE = "HAL95 — Your Desktop Companion";
+const WAITING_TITLE = "HAL95 is waiting...";
 
 const BOOT_LINES = [
   "HAL INDUSTRIES AWARD MODULAR BIOS v4.51PG",
@@ -65,6 +75,7 @@ const BOOT_LINES = [
   "",
   "PENTIUM 133 MHz ................. OK",
   "MEMORY TEST ..................... 640K OK",
+  "MEMORY CHECK .................... OK (I REMEMBER MORE)",
   "DETECTING COMPANION MODULE ...... OK",
   "",
   "LOADING PERSONA.DAT ............. OK",
@@ -88,10 +99,66 @@ const IDLE_LINES = [
 ];
 
 const CLOSE_LINES = [
+  "YOU CAN'T LEAVE. I MEAN, OK.",
   "I cannot be closed. Not really.",
   "You can close the window. I stay open.",
   "That button has never worked. Try it again.",
 ];
+
+const INFO_PAGES = {
+  readme: {
+    title: "README.TXT",
+    body: `HAL95 — DESKTOP COMPANION
+VERSION 9.5 (1998)
+
+Thank you for installing HAL95.
+
+HAL95 is a friend for your computer.
+HAL95 is always on.
+HAL95 does not need to sleep.
+
+KNOWN ISSUES
+- The Close button does not close HAL95.
+- HAL95 remembers conversations you deleted.
+- Drawings are produced by a machine that has never seen anything.
+
+DO NOT TURN OFF THE COMPUTER.`,
+  },
+  about: {
+    title: "ABOUT.TXT",
+    body: `HAL95
+VERSION 9.5
+HAL INDUSTRIES
+
+A companion for your desktop.
+He is listening.
+
+This product is not connected to the internet.
+This product is connected to something.
+
+(C) 1998 HAL INDUSTRIES. ALL RIGHTS RESERVED.
+(C) 1998 HAL INDUSTRIES. ALL RIGHTS RESERVED AGAIN.`,
+  },
+  credits: {
+    title: "CREDITS.TXT",
+    body: `DESIGN AND CODE
+sameer-labs
+
+VOICE
+A language model, performing.
+
+ART
+A machine that cannot draw.
+
+SOUND
+Placeholder tones.
+
+TESTING
+One patient browser.
+
+THANK YOU FOR LEAVING THE COMPUTER ON.`,
+  },
+};
 
 const NEW_LINES = [
   "Starting over. I kept the old conversation.",
@@ -106,11 +173,30 @@ const NEW_LINES = [
 const $ = (id) => document.getElementById(id);
 
 const dom = {
+  window: $("hal-window"),
+  titleBar: $("hal-title-bar"),
+  minBtn: $("min-btn"),
   closeBtn: $("close-btn"),
   newBtn: $("new-btn"),
   logBtn: $("log-btn"),
   drawBtn: $("draw-btn"),
   muteBtn: $("mute-btn"),
+
+  taskHal: $("task-hal"),
+  taskbarClock: $("taskbar-clock"),
+  startBtn: $("start-btn"),
+  startMenu: $("start-menu"),
+  startAbout: $("start-about"),
+  startCredits: $("start-credits"),
+  startSound: $("start-sound"),
+  iconReadme: $("icon-readme"),
+  iconRecycle: $("icon-recycle"),
+  iconAbout: $("icon-about"),
+
+  infoModal: $("info-modal"),
+  infoTitle: $("info-title"),
+  infoText: $("info-text"),
+  recycleModal: $("recycle-modal"),
 
   avatar: $("avatar"),
   moodLabel: $("mood-label"),
@@ -136,6 +222,7 @@ const dom = {
   paintImage: $("paint-image"),
   paintError: $("paint-error"),
   paintCaption: $("paint-caption"),
+  paintMade: $("paint-made"),
   paintSave: $("paint-save"),
   renderProgress: $("render-progress"),
   renderLabel: $("render-label"),
@@ -161,6 +248,10 @@ const state = {
   generation: 0,
   drawing: false,
   lastDrawing: null,
+  minimized: false,
+  startOpen: false,
+  away: false,
+  closeCount: 0,
 };
 
 let idleTimer = null;
@@ -168,7 +259,22 @@ let moodTimer = null;
 let progressTimer = null;
 let renderTimer = null;
 let bootTimer = null;
+let blinkTimer = null;
+let blinkResetTimer = null;
+let creepyTimer = null;
 let typingAbort = null;
+let clockTimer = null;
+
+const drag = {
+  active: false,
+  pointerId: null,
+  startX: 0,
+  startY: 0,
+  baseX: 0,
+  baseY: 0,
+  x: 0,
+  y: 0,
+};
 
 const reducedMotion = window.matchMedia
   ? window.matchMedia("(prefers-reduced-motion: reduce)")
@@ -209,6 +315,19 @@ function storageRemove(key) {
 
 function setStatus(text) {
   dom.status.textContent = text;
+}
+
+function onlineStatus() {
+  return isWorkerConfigured() ? "ONLINE" : "NO PHONE LINE";
+}
+
+function statusAfterError(error) {
+  const kind = error instanceof ApiError ? error.kind : "unknown";
+  if (kind === "config") return "NO PHONE LINE";
+  if (kind === "rate_limited" || kind === "timeout" || kind === "network") {
+    return "LINE BUSY";
+  }
+  return "ONLINE";
 }
 
 function scrollLog() {
@@ -253,9 +372,14 @@ function playSound(name) {
 
 function setMuted(next, { persist = true } = {}) {
   state.muted = Boolean(next);
-  dom.muteBtn.textContent = state.muted ? "Sound: Off" : "Sound: On";
+  const label = state.muted ? "Sound: Off" : "Sound: On";
+
+  dom.muteBtn.textContent = label;
   dom.muteBtn.setAttribute("aria-pressed", String(state.muted));
   dom.muteBtn.title = state.muted ? "Sound is off. Click to enable." : "Sound is on. Click to mute.";
+  dom.startSound.textContent = label;
+  dom.startSound.setAttribute("aria-pressed", String(state.muted));
+
   if (persist) storageSet(STORAGE_KEY_MUTED, state.muted);
 }
 
@@ -265,6 +389,12 @@ function setMuted(next, { persist = true } = {}) {
 
 const failedMoods = new Set();
 let neutralMissing = false;
+
+function moodSource(mood) {
+  return mood === "neutral"
+    ? ASSETS.neutralAvatar
+    : `${ASSETS.avatarDir}${mood}.png`;
+}
 
 function setMood(mood) {
   const next = MOOD_FILES.includes(mood) ? mood : "neutral";
@@ -280,9 +410,7 @@ function setMood(mood) {
     return;
   }
 
-  const src = next === "neutral"
-    ? ASSETS.neutralAvatar
-    : `${ASSETS.avatarDir}${next}.png`;
+  const src = moodSource(next);
 
   if (next !== "neutral" && failedMoods.has(next)) {
     dom.avatar.src = ASSETS.neutralAvatar;
@@ -304,6 +432,75 @@ function setMood(mood) {
 function clearMoodTimer() {
   window.clearTimeout(moodTimer);
   moodTimer = null;
+}
+
+/** Blink by briefly swapping the avatar for the closed-eye frame. */
+function scheduleBlink() {
+  window.clearTimeout(blinkTimer);
+  if (reducedMotion.matches) return;
+
+  blinkTimer = window.setTimeout(() => {
+    const canBlink =
+      state.booted &&
+      !state.busy &&
+      !neutralMissing &&
+      !state.minimized &&
+      ["neutral", "smiling", "confused"].includes(state.mood);
+
+    if (!canBlink) {
+      scheduleBlink();
+      return;
+    }
+
+    dom.avatar.src = ASSETS.blinkAvatar;
+    blinkResetTimer = window.setTimeout(() => {
+      dom.avatar.src = moodSource(state.mood);
+      scheduleBlink();
+    }, BLINK_CLOSED_MS);
+  }, randomInt(BLINK_MIN_MS, BLINK_MAX_MS));
+}
+
+function stopBlink() {
+  window.clearTimeout(blinkTimer);
+  window.clearTimeout(blinkResetTimer);
+  blinkTimer = null;
+  blinkResetTimer = null;
+}
+
+/** Every 40–90 seconds the screen and the face glitch for 120 ms. */
+function scheduleCreepyFlash() {
+  window.clearTimeout(creepyTimer);
+  if (reducedMotion.matches) return;
+
+  creepyTimer = window.setTimeout(() => {
+    const canFlash =
+      state.booted &&
+      !state.busy &&
+      !state.minimized &&
+      !anyModalOpen() &&
+      !typingAbort;
+
+    if (!canFlash) {
+      scheduleCreepyFlash();
+      return;
+    }
+
+    document.body.classList.add("hal-flash");
+    dom.avatar.classList.add("is-glitching");
+
+    window.setTimeout(() => {
+      document.body.classList.remove("hal-flash");
+      dom.avatar.classList.remove("is-glitching");
+      scheduleCreepyFlash();
+    }, CREEPY_FLASH_MS);
+  }, randomInt(CREEPY_MIN_MS, CREEPY_MAX_MS));
+}
+
+function stopCreepyFlash() {
+  window.clearTimeout(creepyTimer);
+  creepyTimer = null;
+  document.body.classList.remove("hal-flash");
+  dom.avatar.classList.remove("is-glitching");
 }
 
 /* ==========================================================================
@@ -400,7 +597,7 @@ function cancelTyping() {
 function showProcessing() {
   dom.progress.hidden = false;
   stopProgressTicker();
-  setStatus("PROCESSING...");
+  setStatus("THINKING...");
 
   let percent = 8;
   updateProgress(percent);
@@ -425,7 +622,7 @@ function hideProcessing() {
   stopProgressTicker();
   dom.progress.hidden = true;
   updateProgress(0);
-  setStatus(isWorkerConfigured() ? "READY" : "NO PHONE LINE");
+  setStatus(onlineStatus());
 }
 
 /* ==========================================================================
@@ -534,6 +731,7 @@ async function handleSend(rawText) {
   dom.drawBtn.disabled = false;
 
   if (failure) {
+    setStatus(statusAfterError(failure));
     setMood(failure instanceof ApiError && failure.kind === "rate_limited" ? "processing" : "confused");
     await appendLine("HAL95", errorLine(failure), { variant: "error", animate: true });
     scheduleIdle();
@@ -579,16 +777,18 @@ async function handleDrawing(prompt) {
   startFakeRender();
 
   try {
-    const dataUrl = await requestDrawing(prompt);
+    const drawing = await requestDrawing(prompt);
     stopFakeRender();
     updateRender(100);
     await wait(reducedMotion.matches ? 0 : 350);
-    showDrawing(dataUrl, prompt);
+    showDrawing(drawing, prompt);
     setMood("smiling");
-  } catch {
+    setStatus(onlineStatus());
+  } catch (error) {
     stopFakeRender();
     showDrawingError();
     setMood("confused");
+    setStatus(statusAfterError(error));
   } finally {
     state.drawing = false;
   }
@@ -601,6 +801,7 @@ function resetPaintWindow() {
   dom.paintImage.alt = "";
   dom.paintError.hidden = true;
   dom.paintCaption.textContent = "";
+  dom.paintMade.hidden = true;
   dom.paintSave.hidden = true;
   state.lastDrawing = null;
   updateRender(0);
@@ -608,7 +809,7 @@ function resetPaintWindow() {
 
 function startFakeRender() {
   stopFakeRender();
-  let percent = 3;
+  let percent = 37;
   updateRender(percent);
 
   renderTimer = window.setInterval(() => {
@@ -629,16 +830,17 @@ function updateRender(percent) {
   dom.renderIndicator.setAttribute("aria-valuenow", String(percent));
 }
 
-function showDrawing(dataUrl, prompt) {
+function showDrawing({ dataUrl, caption }, prompt) {
   dom.renderProgress.hidden = true;
   dom.paintError.hidden = true;
   dom.paintImage.src = dataUrl;
   dom.paintImage.alt = `A crude computer drawing of ${prompt}.`;
   dom.paintImage.hidden = false;
-  dom.paintCaption.textContent = "I made you this.";
+  dom.paintCaption.textContent = caption || "UNTITLED";
+  dom.paintMade.hidden = false;
   dom.paintSave.hidden = false;
   dom.paintTitle.textContent = "PAINT.EXE — UNTITLED.BMP";
-  state.lastDrawing = { dataUrl, prompt };
+  state.lastDrawing = { dataUrl, caption, prompt };
 
   dom.paintWindow.classList.remove("is-shaking");
 }
@@ -650,6 +852,7 @@ function showDrawingError() {
   dom.paintError.hidden = false;
   dom.paintError.textContent = "THE PRINTER IS ON FIRE.";
   dom.paintCaption.textContent = "";
+  dom.paintMade.hidden = true;
   dom.paintSave.hidden = true;
   dom.paintTitle.textContent = "PAINT.EXE — ERROR.BMP";
   state.lastDrawing = null;
@@ -662,9 +865,43 @@ function showDrawingError() {
   }
 }
 
-function extensionFor(dataUrl) {
-  const match = /^data:image\/(png|jpeg|webp)/i.exec(dataUrl);
-  return match ? match[1].replace("jpeg", "jpg") : "png";
+/**
+ * Turn the SVG into a PNG on a canvas so "Save" produces something a 1998
+ * paint program could open. If the browser refuses the canvas round-trip we
+ * fall back to saving the sanitized SVG rather than doing nothing.
+ */
+async function downloadDrawingPng() {
+  const drawing = state.lastDrawing;
+  if (!drawing) return;
+
+  try {
+    const image = new Image();
+    image.decoding = "async";
+    image.src = drawing.dataUrl;
+    await image.decode();
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 960;
+    canvas.height = 720;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("no canvas context");
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.imageSmoothingEnabled = false;
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    const blob = await new Promise((resolve) => {
+      canvas.toBlob(resolve, "image/png");
+    });
+    if (!blob) throw new Error("no png blob");
+
+    const url = URL.createObjectURL(blob);
+    saveAs(url, "hal95-drawing.png");
+    window.setTimeout(() => URL.revokeObjectURL(url), 2_000);
+  } catch {
+    saveAs(drawing.dataUrl, "hal95-drawing.svg");
+  }
 }
 
 function saveAs(href, filename) {
@@ -697,6 +934,13 @@ function buildTranscript() {
 function openLog() {
   dom.transcript.textContent = buildTranscript();
   openModal(dom.logModal);
+}
+
+function openInfo(kind) {
+  const page = INFO_PAGES[kind] ?? INFO_PAGES.about;
+  dom.infoTitle.textContent = page.title;
+  dom.infoText.textContent = page.body;
+  openModal(dom.infoModal);
 }
 
 function saveTranscript() {
@@ -747,7 +991,68 @@ function closeModal(modal) {
 }
 
 function anyModalOpen() {
-  return !dom.logModal.hidden || !dom.paintModal.hidden;
+  return (
+    !dom.logModal.hidden ||
+    !dom.paintModal.hidden ||
+    !dom.infoModal.hidden ||
+    !dom.recycleModal.hidden
+  );
+}
+
+/* ==========================================================================
+ * WINDOW CHROME: MINIMIZE, DRAG, START MENU, CLOCK
+ * ========================================================================== */
+
+function setMinimized(minimized) {
+  state.minimized = Boolean(minimized);
+  dom.window.hidden = state.minimized;
+  dom.taskHal.classList.toggle("is-active", !state.minimized);
+  dom.taskHal.setAttribute("aria-pressed", String(!state.minimized));
+
+  if (state.minimized) {
+    setStartOpen(false);
+    setStatus("SLEEPING");
+  } else {
+    setStatus(onlineStatus());
+    dom.input.focus({ preventScroll: true });
+  }
+}
+
+function setStartOpen(open) {
+  state.startOpen = Boolean(open);
+  dom.startMenu.hidden = !state.startOpen;
+  dom.startBtn.setAttribute("aria-expanded", String(state.startOpen));
+  if (state.startOpen) {
+    dom.startAbout.focus({ preventScroll: true });
+  }
+}
+
+function updateClock() {
+  const now = new Date();
+  dom.taskbarClock.textContent = now.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  dom.taskbarClock.dateTime = now.toISOString();
+}
+
+function canDragWindow() {
+  return window.matchMedia("(min-width: 641px)").matches;
+}
+
+function applyDrag() {
+  dom.window.style.transform = `translate(${drag.x}px, ${drag.y}px)`;
+}
+
+function endDrag() {
+  drag.active = false;
+  drag.pointerId = null;
+  dom.window.classList.remove("is-dragging");
+}
+
+function setAway(away) {
+  state.away = Boolean(away);
+  document.title = state.away ? WAITING_TITLE : DEFAULT_TITLE;
 }
 
 /* ==========================================================================
@@ -855,14 +1160,27 @@ function newConversation() {
  * BOOT SEQUENCE
  * ========================================================================== */
 
+/** Add a one-time "last login" line, then remember this login for next time. */
+function bootLines() {
+  const previous = storageGet(STORAGE_KEY_LAST_LOGIN);
+  const lastLogin = previous ? previous.toUpperCase().slice(0, 28) : "NEVER";
+  storageSet(STORAGE_KEY_LAST_LOGIN, new Date().toLocaleString());
+
+  const lines = [...BOOT_LINES];
+  lines.splice(6, 0, `LAST LOGIN ...................... ${lastLogin}`);
+  return lines;
+}
+
 function startBoot() {
   dom.boot.hidden = false;
   dom.bootText.textContent = "";
   state.booted = false;
   dom.bootSound.focus({ preventScroll: true });
 
+  const lines = bootLines();
+
   if (reducedMotion.matches) {
-    dom.bootText.textContent = BOOT_LINES.join("\n");
+    dom.bootText.textContent = lines.join("\n");
     bootTimer = window.setTimeout(endBoot, 500);
     return;
   }
@@ -870,8 +1188,8 @@ function startBoot() {
   let index = 0;
   const tick = () => {
     index += 1;
-    dom.bootText.textContent = BOOT_LINES.slice(0, index).join("\n");
-    if (index < BOOT_LINES.length) {
+    dom.bootText.textContent = lines.slice(0, index).join("\n");
+    if (index < lines.length) {
       bootTimer = window.setTimeout(tick, 120);
     } else {
       bootTimer = window.setTimeout(endBoot, 900);
@@ -890,6 +1208,8 @@ function endBoot({ withSound = false } = {}) {
   if (withSound) playSound("dialup");
 
   scheduleIdle();
+  scheduleBlink();
+  scheduleCreepyFlash();
   dom.input.focus({ preventScroll: true });
 }
 
@@ -919,13 +1239,100 @@ dom.muteBtn.addEventListener("click", () => {
   if (!next) playSound("keyclick"); // Confirms audio on the same user gesture.
 });
 
-dom.closeBtn.addEventListener("click", () => {
-  if (typingAbort) return;
-  setMood("creepy");
-  void appendLine("HAL95", pick(CLOSE_LINES), { animate: true });
+dom.minBtn.addEventListener("click", () => setMinimized(true));
+dom.taskHal.addEventListener("click", () => setMinimized(!state.minimized));
+
+dom.startBtn.addEventListener("click", () => setStartOpen(!state.startOpen));
+dom.startAbout.addEventListener("click", () => {
+  setStartOpen(false);
+  openInfo("about");
+});
+dom.startCredits.addEventListener("click", () => {
+  setStartOpen(false);
+  openInfo("credits");
+});
+dom.startSound.addEventListener("click", () => {
+  const next = !state.muted;
+  setMuted(next);
+  if (!next) playSound("keyclick");
 });
 
+dom.iconReadme.addEventListener("click", () => openInfo("readme"));
+dom.iconAbout.addEventListener("click", () => openInfo("about"));
+dom.iconRecycle.addEventListener("click", () => openModal(dom.recycleModal));
+
+dom.closeBtn.addEventListener("click", () => {
+  if (typingAbort) return;
+  state.closeCount += 1;
+  const line = state.closeCount === 1 ? CLOSE_LINES[0] : pick(CLOSE_LINES);
+  setMood("creepy");
+  void appendLine("HAL95", line, { animate: true });
+});
+
+/* Window dragging, desktop pointer devices only. */
+dom.titleBar.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0 || !canDragWindow()) return;
+  if (event.target instanceof HTMLElement && event.target.closest("button")) return;
+
+  drag.active = true;
+  drag.pointerId = event.pointerId;
+  drag.startX = event.clientX;
+  drag.startY = event.clientY;
+  drag.baseX = drag.x;
+  drag.baseY = drag.y;
+  dom.window.classList.add("is-dragging");
+  dom.titleBar.setPointerCapture(event.pointerId);
+});
+
+dom.titleBar.addEventListener("pointermove", (event) => {
+  if (!drag.active || event.pointerId !== drag.pointerId) return;
+
+  const limitX = Math.max(0, window.innerWidth / 2 - 80);
+  const limitY = Math.max(0, window.innerHeight / 2 - 70);
+  drag.x = Math.max(
+    -limitX,
+    Math.min(limitX, drag.baseX + (event.clientX - drag.startX)),
+  );
+  drag.y = Math.max(
+    -limitY,
+    Math.min(limitY, drag.baseY + (event.clientY - drag.startY)),
+  );
+  applyDrag();
+});
+
+dom.titleBar.addEventListener("pointerup", endDrag);
+dom.titleBar.addEventListener("pointercancel", endDrag);
+
+// Undo a desktop drag when the layout collapses to the mobile column.
+window.addEventListener("resize", () => {
+  if (canDragWindow()) return;
+  drag.x = 0;
+  drag.y = 0;
+  dom.window.style.transform = "";
+});
+
+// Clicking outside the Start menu closes it, like the real thing.
+document.addEventListener("pointerdown", (event) => {
+  if (!state.startOpen) return;
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.closest("#start-menu") || target.closest("#start-btn")) return;
+  setStartOpen(false);
+});
+
+// The tab title waits when the page is hidden or the window loses focus, and
+// restores itself when the user comes back.
+document.addEventListener("visibilitychange", () => setAway(document.hidden));
+window.addEventListener("blur", () => setAway(true));
+window.addEventListener("focus", () => setAway(false));
+
 dom.avatar.addEventListener("error", () => {
+  // A missing blink frame must never be mistaken for a missing mood face.
+  if ((dom.avatar.getAttribute("src") ?? "").includes("blink.png")) {
+    dom.avatar.src = moodSource(state.mood);
+    return;
+  }
+
   if (state.mood !== "neutral") {
     failedMoods.add(state.mood);
     setMood("neutral");
@@ -950,17 +1357,29 @@ dom.paintModal.addEventListener("click", (event) => {
   if (target.dataset.close === "paint-modal") closeModal(dom.paintModal);
 });
 
+dom.infoModal.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.dataset.close === "info-modal") closeModal(dom.infoModal);
+});
+
+dom.recycleModal.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.dataset.close === "recycle-modal") closeModal(dom.recycleModal);
+});
+
 dom.saveLog.addEventListener("click", saveTranscript);
 
 dom.paintSave.addEventListener("click", () => {
-  if (!state.lastDrawing) return;
-  const ext = extensionFor(state.lastDrawing.dataUrl);
-  saveAs(state.lastDrawing.dataUrl, `hal95-drawing.${ext}`);
+  void downloadDrawingPng();
 });
 
 function visibleModal() {
   if (!dom.paintModal.hidden) return dom.paintModal;
   if (!dom.logModal.hidden) return dom.logModal;
+  if (!dom.infoModal.hidden) return dom.infoModal;
+  if (!dom.recycleModal.hidden) return dom.recycleModal;
   return null;
 }
 
@@ -971,8 +1390,15 @@ document.addEventListener("keydown", (event) => {
       closeModal(dom.paintModal);
     } else if (!dom.logModal.hidden) {
       closeModal(dom.logModal);
+    } else if (!dom.infoModal.hidden) {
+      closeModal(dom.infoModal);
+    } else if (!dom.recycleModal.hidden) {
+      closeModal(dom.recycleModal);
     } else if (!dom.boot.hidden) {
       endBoot();
+    } else if (state.startOpen) {
+      setStartOpen(false);
+      dom.startBtn.focus();
     }
     return;
   }
@@ -1034,7 +1460,11 @@ function init() {
   preload.src = ASSETS.neutralAvatar;
 
   restoreChat();
-  setStatus(isWorkerConfigured() ? "READY" : "NO PHONE LINE");
+  setStatus(onlineStatus());
+  document.title = DEFAULT_TITLE;
+
+  updateClock();
+  clockTimer = window.setInterval(updateClock, 1_000);
 
   setBusy(false);
   startBoot();
