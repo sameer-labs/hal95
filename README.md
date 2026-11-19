@@ -9,10 +9,14 @@ of a conversation. The words come from a modern language model running behind a
 small Cloudflare Worker proxy.
 
 It can also be asked to draw. It is not good at drawing. That is the point.
+Drawings are deliberately terrible SVGs written by the same language model, with
+wrong proportions, wobbly black outlines and flat colours that miss their own
+shapes. No image-generation service is involved.
 
 - **Live site:** <https://sameer-labs.github.io/hal95/>
 - **Worker:** <https://hal95-worker.sameer0ayat.workers.dev>
 - **Persona transcript:** [`docs/persona-test.md`](docs/persona-test.md)
+- **Drawing samples:** [`docs/draw-samples/`](docs/draw-samples/) (10 SVG + PNG pairs)
 
 The site is plain HTML, CSS and JavaScript. No framework, no bundler, no build
 step: GitHub Pages serves the files exactly as they are in this repository. A
@@ -21,6 +25,8 @@ small Playwright smoke test is the only Node dependency.
 ![HAL95 running on a desktop](docs/desktop-1440.png)
 
 ![HAL95 at 375px](docs/mobile-375.png)
+
+![HAL95's Paint window with a deliberately crude SVG drawing](docs/paint-1440.png)
 
 ---
 
@@ -45,7 +51,9 @@ Three rules shape every reply:
 The model returns a mood tag with every reply (`[neutral]`, `[smiling]`,
 `[confused]`, `[processing]`, `[creepy]`). The frontend strips the tag and uses
 it to swap the avatar. Drawing requests come back with a `<DRAW: subject>` token,
-which opens a Paint-style window with a deliberately crude generated image.
+which opens a Paint-style window: the Worker asks DeepSeek for a crude SVG,
+sanitizes it against a shape whitelist, and the browser shows it through an
+`<img>` data URL. Save converts the SVG to a PNG on a canvas.
 
 ---
 
@@ -57,18 +65,37 @@ which opens a Paint-style window with a deliberately crude generated image.
   segmented progress bar, then a character-by-character typewriter with a
   keyclick. Both are disabled under `prefers-reduced-motion`.
 - **Art feature.** Ask in words or press **Draw**. Fake "Rendering... 37%" bar,
-  then a bordered Paint window with a caption and a Save button.
+  then a bordered Paint window with a caption, "I made you this.", a gentle
+  wobble, and a Save button that produces a PNG.
+- **Terrible SVG artist.** The Worker gives DeepSeek a separate artist prompt
+  with three few-shot examples. Output must be a 320×240 SVG with 6–14 shapes,
+  thick wobbly outlines and a six-word caption. The server rebuilds it from a
+  whitelist of `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon` and
+  `path`; text, scripts, styles and external references can never survive.
+- **Desktop furniture.** Draggable title bar on desktop, minimize to the
+  taskbar, a Start menu (About, Credits, Sound), a working clock, and three
+  shortcuts including a Recycle Bin that remembers every deleted conversation.
+- **A face that is never quite still.** The avatar drifts and breathes, blinks
+  at random, and every 40–90 seconds the screen glitches for 120 ms. All of it
+  stops under `prefers-reduced-motion`.
+- **Close does not close.** It answers `YOU CAN'T LEAVE. I MEAN, OK.` and stays
+  exactly where it was.
 - **Retro chat log.** **Log** opens `CHATLOG.TXT` with the transcript and a
   **Save .txt** button.
 - **Remembers locally.** Last 20 messages in `localStorage`, restored on load.
   **New** starts over with an in-character line.
 - **Idle behaviour.** Forty-five seconds of silence and HAL95 says something
   unsettling from a hardcoded list of ten lines. No API call, no cost.
-- **Boot sequence.** Fake BIOS lines, a skippable overlay, and an optional
-  dial-up tone that only plays after a real click.
-- **Mute that persists.** Sound starts muted; the preference is remembered.
+- **Boot sequence.** Fake BIOS lines, a one-time last-login line, a fake memory
+  check, a skippable overlay, and an optional dial-up tone that only plays after
+  a real click.
+- **Tab title that waits.** Switch tabs or blur the window and the title becomes
+  `HAL95 is waiting...`; focus restores it.
+- **Mute that persists.** Sound starts muted; the preference is remembered and
+  mirrored in both the toolbar and the Start menu.
+- **Live status bar.** `ONLINE`, `THINKING...`, `LINE BUSY`, `NO PHONE LINE`.
 - **Failure copy everywhere.** Offline, rate limited, timed out, empty reply,
-  missing artwork: each has its own in-character line and no raw errors.
+  bad SVG, missing artwork: each has its own in-character line and no raw errors.
 - **Accessible by default.** `aria-live="polite"` log, alt text, keyboard
   operable dialogs with a focus trap, visible focus, reduced-motion support.
 - **Missing images never show a broken icon.** A failed avatar load becomes a
@@ -88,6 +115,7 @@ which opens a Paint-style window with a deliberately crude generated image.
 │                          js/api.js                    │
 │                                                       │
 │  Renders mood + strips <DRAW: ...>                    │
+│  Shows SVG only through <img src="data:image/svg+xml">│
 │  Holds no API key, no system prompt                   │
 └───────────────────────┬───────────────────────────────┘
                         │  POST /       { messages: [...] }
@@ -99,16 +127,18 @@ which opens a Paint-style window with a deliberately crude generated image.
 │                                                       │
 │  • injects HAL95_SYSTEM_PROMPT (server-side only)     │
 │  • validates JSON, roles, 10-message history, 300 chars│
-│  • thinking disabled, max_tokens = 80                 │
-│  • KV: 20 requests / minute / IP                      │
-│  • KV: 1,500 requests / UTC day globally              │
-│  • secrets: DEEPSEEK_API_KEY, HUGGINGFACE_API_KEY     │
-└───────────┬───────────────────────────┬───────────────┘
-            │                           │
-            ▼                           ▼
-   DeepSeek chat API          Hugging Face Inference
-   deepseek-flash             SD3-Medium (512px)
-   (80 output tokens)         (crude style prompt)
+│  • chat: thinking disabled, max_tokens = 80           │
+│  • draw: artist prompt, max_tokens = 900, 100-char cap│
+│  • sanitizes the SVG through worker/sanitize.js       │
+│  • KV: 20 chat/min and 5 draws/min per IP             │
+│  • KV: 1,500 weighted units per UTC day globally      │
+│  • secret: DEEPSEEK_API_KEY                           │
+└───────────────────────────┬───────────────────────────┘
+                            │
+                            ▼
+                   DeepSeek chat completions
+                   deepseek-flash
+                   chat (80 tokens) + SVG art (900 tokens)
 ```
 
 ### Why the proxy exists
@@ -118,8 +148,8 @@ Pages publishes it to everyone who opens DevTools, and a billing limit is not a
 security model. The Worker is the smallest piece of server code that fixes the
 three real problems:
 
-1. **Key custody.** The DeepSeek and Hugging Face tokens live in Worker secrets,
-   never in the repository and never in the browser.
+1. **Key custody.** The DeepSeek token lives in a Worker secret, never in the
+   repository and never in the browser. Chat and drawing share it.
 2. **Persona integrity.** If the system prompt were sent from the client, anyone
    could replace it and use the bot for something else. The Worker injects it,
    so the client can only supply chat history. Client-sent `system` messages are
@@ -139,7 +169,8 @@ three real problems:
 | Styles | CSS + [98.css](https://jdan.github.io/98.css/) via CDN | Authentic Win98 widgets; the only runtime third-party dependency |
 | Logic | Vanilla ES modules | No build step, readable in DevTools |
 | Text model | DeepSeek `deepseek-flash` | Cheap, fast, good at terse character work |
-| Image model | `stabilityai/stable-diffusion-3-medium-diffusers` on `hf-inference` | The only live text-to-image mapping on that provider (Nov 2026); gated |
+| Drawing model | DeepSeek `deepseek-flash` | The same model, told to be a bad 1998 paint program |
+| SVG sanitizer | Custom whitelist (`worker/sanitize.js`) | Rebuilds every drawing from shape elements; no script can survive |
 | Proxy | Cloudflare Worker + KV | Free tier, secrets, a global edge, durable counters |
 | Hosting | GitHub Pages | Free static hosting, fits the project's scale |
 | Tests | Playwright | One smoke test, no framework |
@@ -157,17 +188,21 @@ hal95/
 │   ├── api.js                 # Worker client: timeouts, retry, errors
 │   └── persona.js             # system prompt (imported by the Worker only)
 ├── worker/
-│   ├── worker.js              # proxy, KV limits, image route
+│   ├── worker.js              # proxy, KV limits, chat + SVG draw routes
+│   ├── sanitize.js            # shape/attribute whitelist + caption parser
 │   └── wrangler.toml          # Worker + KV binding
 ├── assets/
-│   ├── avatar-states/         # 5 placeholder mood PNGs (replace these)
+│   ├── avatar-states/         # 6 placeholder mood/blink PNGs (replace these)
 │   └── sounds/                # generated placeholder dial-up + click tones
 ├── docs/
-│   ├── desktop-1440.png       # real screenshot
+│   ├── desktop-1440.png       # real screenshot (with taskbar + icons)
 │   ├── mobile-375.png         # real screenshot
-│   └── persona-test.md        # eight-message persona transcript
+│   ├── persona-test.md        # eight-message persona transcript
+│   └── draw-samples/          # 10 live SVG drawings + rendered PNGs
 ├── tools/
 │   ├── make-placeholder-avatars.py
+│   ├── make-draw-samples.mjs  # regenerate docs/draw-samples from the Worker
+│   ├── test-sanitizer.mjs     # hostile-SVG unit tests
 │   └── test-ui.mjs            # Playwright smoke test
 ├── package.json               # test-only dev dependency
 └── README.md
@@ -203,7 +238,6 @@ npx wrangler dev
 
 ```
 DEEPSEEK_API_KEY=sk-...
-HUGGINGFACE_API_KEY=hf_...
 ```
 
 The `.dev.vars` file is never committed.
@@ -217,9 +251,23 @@ python3 -m http.server 8000   # in another terminal
 npm run test:ui
 ```
 
-The test drives the real deployed Worker, checks the chat reply, mood swap, Log
-modal, New, Draw and 375px overflow, and writes `docs/desktop-1440.png` and
+The test drives the real deployed Worker. It checks the boot lines, chat reply,
+mood swap, Close line, Log modal, New, the SVG drawing and caption, PNG download,
+taskbar clock, Start menu, Recycle Bin, minimize/restore, title-bar dragging,
+the waiting tab title, and 375px overflow. It writes `docs/desktop-1440.png` and
 `docs/mobile-375.png`.
+
+Sanitizer tests are offline and need no secret:
+
+```bash
+npm run test:sanitizer
+```
+
+Regenerate the public drawing gallery from the deployed Worker:
+
+```bash
+npm run draw:samples
+```
 
 ---
 
@@ -233,22 +281,18 @@ modal, New, Draw and 375px overflow, and writes `docs/desktop-1440.png` and
 3. Create a DeepSeek API key at <https://platform.deepseek.com/api_keys>.
    DeepSeek is usage-billed; a portfolio demo costs very little, but it is not
    free like Workers.
-4. Store it as a Worker secret (never in a file):
+4. Store it as a Worker secret (never in a file). The same key powers chat and
+   the SVG drawing route:
    ```bash
    npx wrangler secret put DEEPSEEK_API_KEY
    ```
-5. For the Draw feature, create a Hugging Face token with **Inference Providers**
-   permission at <https://huggingface.co/settings/tokens> and store it:
-   ```bash
-   npx wrangler secret put HUGGINGFACE_API_KEY
-   ```
-6. Create the KV namespace used for rate limiting:
+5. Create the KV namespace used for rate limiting:
    ```bash
    npx wrangler kv namespace create RATE_LIMIT
    ```
    Paste the printed id into the `[[kv_namespaces]]` block in
    `worker/wrangler.toml`.
-7. Set the GitHub Pages origin in the `ALLOWED_ORIGINS` array in
+6. Set the GitHub Pages origin in the `ALLOWED_ORIGINS` array in
    `worker/worker.js` (scheme + host only, no path):
    ```js
    const ALLOWED_ORIGINS = [
@@ -256,11 +300,11 @@ modal, New, Draw and 375px overflow, and writes `docs/desktop-1440.png` and
      "https://sameer-labs.github.io",
    ];
    ```
-8. Deploy:
+7. Deploy:
    ```bash
    npx wrangler deploy
    ```
-9. Put the printed `https://hal95-worker.<subdomain>.workers.dev` URL into
+8. Put the printed `https://hal95-worker.<subdomain>.workers.dev` URL into
    `WORKER_URL` in `js/api.js` (no trailing slash), then commit and push.
 
 Verify the secrets exist without printing them:
@@ -296,16 +340,19 @@ There is no build command and no output directory to configure.
 | --- | --- | --- |
 | `js/api.js` | `WORKER_URL` | Deployed Worker URL, no trailing slash |
 | `worker/worker.js` | `ALLOWED_ORIGINS` | Exact browser origins allowed to call the Worker |
-| `worker/worker.js` | `GLOBAL_DAILY_MAX` | All-request daily spending guard (default 1,500) |
-| `worker/worker.js` | `RATE_LIMIT_MAX` | Per-IP requests per minute (default 20) |
-| `worker/worker.js` | `IMAGE_PROVIDER_URL`, `IMAGE_MODEL` | Image provider endpoint and model |
-| `worker/worker.js` | `DRAW_STYLE_PREFIX` | Style cues that keep drawings crude |
-| `js/app.js` | `ASSETS` | Avatar directory, neutral PNG, two sounds |
+| `worker/worker.js` | `GLOBAL_DAILY_MAX` | Weighted daily spending guard (default 1,500 units) |
+| `worker/worker.js` | `RATE_LIMIT_MAX` | Chat requests per IP per minute (default 20) |
+| `worker/worker.js` | `DRAW_RATE_LIMIT_MAX` | Drawing requests per IP per minute (default 5) |
+| `worker/worker.js` | `DRAW_DAILY_WEIGHT` | Daily units charged per drawing (default 2) |
+| `worker/worker.js` | `DRAW_SYSTEM_PROMPT` | The terrible-artist prompt and three examples |
+| `worker/sanitize.js` | `ALLOWED_TAGS`, `ALLOWED_ATTRS` | The SVG shape/attribute whitelist |
+| `js/app.js` | `ASSETS` | Avatar directory, neutral/blink PNGs, two sounds |
 | `js/persona.js` | `HAL95_SYSTEM_PROMPT` | The character, rules and few-shot examples |
 
 Other tuning constants: `MAX_OUTPUT_TOKENS`, `MAX_INPUT_CHARS`,
-`MAX_HISTORY_MESSAGES`, `MAX_BODY_CHARS` in the Worker; `IDLE_AFTER_MS`,
-`MOOD_RESET_MS`, `PROCESSING_MIN_MS`/`PROCESSING_MAX_MS` in `app.js`.
+`MAX_HISTORY_MESSAGES`, `MAX_BODY_CHARS`, `MAX_DRAW_TOKENS`,
+`MAX_DRAW_PROMPT_CHARS` in the Worker; `IDLE_AFTER_MS`, `MOOD_RESET_MS`,
+`PROCESSING_MIN_MS`/`PROCESSING_MAX_MS`, `BLINK_*`, `CREEPY_*` in `app.js`.
 
 ---
 
@@ -351,11 +398,30 @@ Request:
 Response `200`:
 
 ```json
-{ "image": "<base64>", "mimeType": "image/png", "prompt": "a lonely house at night" }
+{
+  "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 320 240\" ...>...</svg>",
+  "caption": "NOBODY HOME BUT THE MOON",
+  "prompt": "a lonely house at night"
+}
 ```
 
-The prompt is prefixed with deliberately crude style cues and rendered at
-512×512. The frontend wraps the base64 in a data URL for display and download.
+The prompt is capped at 100 characters and whitespace-normalised. DeepSeek is
+asked for a 320×240 SVG with 6–14 shapes, thick wobbly black outlines, flat
+primary colours and a caption of at most six words. The Worker then:
+
+- extracts the `<svg>` and `CAPTION:` line, tolerating markdown fences;
+- discards the model's root element and rebuilds a fresh one with a fixed
+  `viewBox` and a white background rect;
+- keeps only `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon` and
+  `path`, and only numeric/geometry/paint attributes;
+- drops `on*`, `href`/`xlink:href`, `style`, `class`, `url()`, `data:`,
+  `javascript:`, text and foreign objects;
+- rejects drawings over 8 KB or 24 elements, retries the model once, and returns
+  the in-character printer error rather than raw output if both attempts fail.
+
+The browser only ever receives a string that starts with `<svg` and is placed in
+`<img src="data:image/svg+xml;charset=utf-8,...">`. It never parses the SVG as
+markup. Save draws the image onto a 960×720 canvas and downloads a PNG.
 
 ### Errors
 
@@ -367,10 +433,10 @@ headers are never forwarded; only the upstream status is written to
 | --- | --- | --- |
 | `400` | Invalid JSON, role, length, history or content type | `THAT FILE IS CORRUPT. TRY LATER.` |
 | `403` | Origin not allowed | `FILE NOT FOUND.` |
-| `429` | Per-IP limit | `THE LINE IS BUSY. CALL BACK LATER.` |
+| `429` | Chat or draw per-IP limit | `THE LINE IS BUSY. CALL BACK LATER.` |
 | `429` | Global daily cap | `THE LINE IS BUSY. CALL BACK TOMORROW.` |
-| `502` / `504` | Upstream error, timeout or empty reply | `THAT FILE IS CORRUPT. TRY LATER.` |
-| `500` | Missing secret | `THE LINE IS DOWN. TRY AGAIN.` |
+| `502` / `504` | Upstream error, timeout, empty reply or unusable SVG | `THAT FILE IS CORRUPT. TRY LATER.` (chat) / `THE PRINTER IS ON FIRE.` (draw) |
+| `500` | Missing secret | `THE LINE IS DOWN. TRY AGAIN.` (chat) / `THE PRINTER IS ON FIRE.` (draw) |
 
 The UI maps HTTP status to its own in-character line, so the exact body is not
 user-facing copy.
@@ -379,27 +445,34 @@ user-facing copy.
 
 ## Security notes
 
-- **No key in the repo.** `DEEPSEEK_API_KEY` and `HUGGINGFACE_API_KEY` exist only
-  as Cloudflare Worker secrets. `.env`, `.dev.vars`, `node_modules` and
-  `.wrangler` are git-ignored.
+- **No key in the repo.** `DEEPSEEK_API_KEY` exists only as a Cloudflare Worker
+  secret. `.env`, `.dev.vars`, `node_modules` and `.wrangler` are git-ignored.
+  Chat and drawing share the one key; there is no image-service dependency.
 - **CORS is an allow-list, not a wildcard.** The Worker reflects an `Origin`
   only when it exactly matches `ALLOWED_ORIGINS`, and preflight from any other
   origin gets no `Access-Control-Allow-Origin`.
 - **The system prompt is server-side.** `js/persona.js` is imported by the
   Worker bundle, not loaded by the page. There is no request field that can
   replace it.
-- **Two layers of rate limiting.** A KV counter caps each IP at 20 requests per
-  minute across isolates, and a KV global counter caps the whole deployment at
-  1,500 requests per UTC day. If KV is unavailable, an in-isolate counter still
-  acts as a speed bump.
+- **Two layers of rate limiting.** KV counters cap each IP at 20 chats and 5
+  drawings per minute across isolates, and a global counter caps the deployment
+  at 1,500 weighted units per UTC day. A drawing charges two units. If KV is
+  unavailable, an in-isolate counter still acts as a speed bump.
 - **Spending is bounded.** Chat is capped at 80 output tokens and 10 history
-  messages. Images are capped at 2 MB and a 60-second upstream timeout.
-- **No HTML injection.** Bot, user and transcript text is inserted with
+  messages. Drawing is capped at 900 output tokens, a 100-character prompt and
+  two 35-second attempts.
+- **SVG is treated as hostile input.** Even though the model runs on our
+  account, its output is rebuilt from a shape whitelist before the browser sees
+  it. The root element, namespaces, text, styles, links, event handlers,
+  `url()` and `data:` references are all discarded. The result is only ever
+  loaded as an `<img>` data URL, not parsed into the DOM.
+- **No HTML injection.** Bot, user, transcript and caption text is inserted with
   `textContent`. There is no `innerHTML` path for model output.
-- **No upstream leakage.** Provider errors are logged server-side and replaced
-  with generic in-character messages.
-- **Least privilege.** The Hugging Face token needs only Inference Providers
-  write access; the DeepSeek key needs only chat completions.
+- **No upstream leakage.** Provider errors and raw SVG are logged server-side
+  (status or rejection reason only) and replaced with generic in-character
+  messages.
+- **Least privilege.** The DeepSeek key needs only chat completions; the draw
+  route reuses it rather than adding a second provider credential.
 
 ---
 
@@ -409,8 +482,9 @@ The files in `assets/` are committed placeholders, not final art:
 
 - `assets/avatar-states/*.png` are 512×512, palette-quantised, 4–5 KB each,
   generated with `tools/make-placeholder-avatars.py` (Pillow). They are crude
-  bald-head-with-glasses stand-ins with distinct moods. **Replace them with real
-  renders** while keeping the filenames and a shared silhouette.
+  bald-head-with-glasses stand-ins with distinct moods and a `blink.png`
+  closed-eye frame. **Replace them with real renders** while keeping the
+  filenames and a shared silhouette.
 - `assets/sounds/dialup.mp3` and `keyclick.mp3` are tiny generated tones
   (ffmpeg sine waves, 0.5–6 KB), not real dial-up recordings. Replace them if
   you want the authentic modem handshake.
@@ -430,6 +504,24 @@ python3 tools/make-placeholder-avatars.py
 
 ---
 
+## Drawing samples
+
+Ten live requests to `/draw`, saved as sanitized SVG and rendered headlessly to
+PNG. These are not hand-picked: they are the model's actual output, including
+the duplicates and proportions it chose.
+
+| | | |
+| --- | --- | --- |
+| ![horse](docs/draw-samples/horse.png) | ![cat](docs/draw-samples/cat.png) | ![rocket](docs/draw-samples/rocket.png) |
+| ![my mum](docs/draw-samples/mum.png) | ![the meaning of life](docs/draw-samples/meaning-of-life.png) | ![dog](docs/draw-samples/dog.png) |
+| ![house](docs/draw-samples/house.png) | ![moon](docs/draw-samples/moon.png) | ![sandwich](docs/draw-samples/sandwich.png) |
+
+The tenth, [bicycle](docs/draw-samples/bicycle.png), was rendered after the
+Worker's 5-per-minute draw limit asked the generator to wait. Captions are in
+[`docs/draw-samples/captions.md`](docs/draw-samples/captions.md).
+
+---
+
 ## Accessibility and performance
 
 - The chat log is a `role="log"` region with `aria-live="polite"`. Animated lines
@@ -438,15 +530,17 @@ python3 tools/make-placeholder-avatars.py
 - Dialogs close on `Escape`, trap Tab, restore focus to the opener, and use
   `aria-modal`.
 - `prefers-reduced-motion: reduce` disables the typewriter, CRT flicker,
-  progress-bar transitions and error shake. The boot text appears at once.
+  progress-bar transitions, error shake, avatar drift/breathing, random blinks,
+  the creepy flash and the Paint wobble. The boot text appears at once.
 - The CRT overlay is decorative, `aria-hidden`, and uses `pointer-events: none`
   so it can never swallow a click.
 - Fonts use the native 11px pixel size with `-webkit-font-smoothing: none` and no
   letter-spacing. Above 1200px the window is zoomed 1.5× for legibility while
   images stay `image-rendering: pixelated`.
 - One CDN stylesheet, one preloaded image, and lazily constructed audio keep the
-  first load small. Avatars are 4–5 KB each; screenshots are the only large
-  files in the repo.
+  first load small. Avatars are 4–5 KB each, drawings are 0.8–1.3 KB of SVG, and
+  screenshots are the only large files in the repo. Drawing is one request with
+  no image service, CDN or second provider in the path.
 - Layout is tested at 1440px and 375px, including a short-screen rule that
   shrinks the avatar column before anything can clip.
 
@@ -458,12 +552,15 @@ python3 tools/make-placeholder-avatars.py
   across isolates but can lag by up to a minute, so a fast burst can overshoot
   the nominal limit. The daily cap is still a spending guard, not a billing
   guarantee. A Durable Object would be the strict version.
-- **The image model is gated.** `stabilityai/stable-diffusion-3-medium-diffusers`
-  is the only text-to-image model currently mapped to `hf-inference`, and it
-  requires accepting the SD3 licence on Hugging Face plus a token with
-  Inference Providers write permission. Without both, Hugging Face returns
-  `403` and the UI correctly shows `THE PRINTER IS ON FIRE.` Check
-  `npx wrangler tail` if Draw always fails.
+- **The artist is a language model, not a drawing model.** It can produce a
+  malformed path, a duplicate background rect, a subject that barely resembles
+  the prompt or a caption that is funnier than the picture. The Worker retries
+  once, sanitizes what survives, and otherwise shows `THE PRINTER IS ON FIRE.`
+  Check `npx wrangler tail` if Draw always fails.
+- **A drawing is slower than a chat reply.** It asks for up to 900 output
+  tokens and allows two 35-second attempts, so the Paint window can sit at
+  "Rendering... 37%" for a while. The fake progress bar is honest about being
+  fake, but the wait is real.
 - **Chat history is client-supplied.** The persona cannot be overridden, but a
   determined caller can send whatever history they like. That only affects their
   own conversation, and the token cap keeps the cost bounded.
@@ -471,10 +568,12 @@ python3 tools/make-placeholder-avatars.py
   `localStorage`, capped at the last 20 messages.
 - **No streaming.** Replies are capped at 80 tokens and appear after the fake
   processing delay, so latency is part of the design rather than hidden.
-- **Base64 images are ~33% larger** than the raw bytes. The Worker rejects
-  images over 2 MB to stay well inside response limits.
-- **Boot runs on every page load** (skippable, about 1.5 seconds). It is
-  decorative and never blocks the network.
+- **Drawings are SVG, not bitmaps.** They are crisp at any size but limited to
+  primitive shapes, which is part of the joke. Save rasterises to a 960×720 PNG
+  in the browser; the original stays small.
+- **Boot runs on every page load** (skippable, about 2 seconds). It is
+  decorative and never blocks the network. The last-login line is a real
+  `localStorage` value, not a server timestamp.
 - **The avatar art and sounds are placeholders.** See the Assets section.
 
 ---
@@ -485,14 +584,28 @@ python3 tools/make-placeholder-avatars.py
   art, insult, inappropriate request, rambling, gibberish). All replies had a
   valid mood tag, stayed under 25 words, emitted `<DRAW: ...>` only for art, and
   refused inappropriate content in character.
-- `npm run test:ui`: 9/9 checks passed at 1440px and 375px, with no unexpected
-  browser console errors. Draw returned the expected in-character failure
-  because the current Hugging Face token cannot reach the gated SD3 model
-  (licence and/or Inference Providers permission).
-- Manual `curl` matrix: valid chat `200`, disallowed origin `403` with no CORS
-  allow header, bad JSON / wrong role / >300 chars / >10 messages / wrong
-  content type `400`, 25 rapid requests trigger `429`, daily-cap code path
-  returns `THE LINE IS BUSY. CALL BACK TOMORROW.`
+- `npm run test:ui`: 29/29 checks passed at 1440px and 375px, with no unexpected
+  browser console errors. The draw step now verifies a real
+  `data:image/svg+xml` result, a caption, "I made you this.", and a downloaded
+  PNG, not the old printer failure.
+- `npm run test:sanitizer`: 10/10 offline checks, including script tags,
+  `onload`, `onclick`, `javascript:` URLs, external `href`, `url()` paints,
+  `data:` fills, `style`/`class`, unknown wrappers, empty/text-only SVGs, too
+  many elements and an oversized drawing.
+- Drawing samples: ten varied prompts (horse, cat, rocket, my mum, the meaning
+  of life, dog, house, moon, sandwich, bicycle) generated through the live
+  Worker, saved as SVG, and rendered to PNG. The 5-per-minute limit was observed
+  and handled with `Retry-After`.
+- Manual `curl` matrix: valid chat `200`, valid draw `200` with
+  `{svg, caption, prompt}`, disallowed origin `403` with no CORS allow header,
+  bad JSON / wrong role / >300 chars / >10 messages / wrong content type `400`,
+  a 101-character draw prompt `400`, 6 rapid draws trigger `429`, and the
+  daily-cap code path returns `THE LINE IS BUSY. CALL BACK TOMORROW.`
+- Local Lighthouse (Chrome headless, `http://localhost:8000`): Performance 99,
+  Accessibility 96, Best Practices 96, SEO 100; LCP 1.6 s, CLS 0.007, TBT 70 ms.
+  The remaining accessibility point is touch-target size on 98.css's tiny
+  controls; Best Practices flags the deliberate 11px pixel font. There is no
+  framework and no client-side image work until Draw is pressed.
 
 ---
 
@@ -510,8 +623,19 @@ is just conversation, which is the point.
 
 **Failure is part of the character, not an error state.** Writing
 `MEMORY FULL. TRY LATER.` for a 429 and `THE PRINTER IS ON FIRE.` for a dead
-image API made the project feel more finished than any success path. It also
+drawing route made the project feel more finished than any success path. It also
 removed the temptation to show a raw exception to a visitor.
+
+**A worse drawing is a better feature.** An image model produced something
+plausible; asking the text model for a deliberately broken SVG produced
+something that actually belongs in a 1998 Paint window. The constraint became
+the joke: thick wobbly outlines, flat colours, wrong proportions and a caption
+of six words or fewer.
+
+**Model output is untrusted even when the model is ours.** The SVG route could
+have been a one-line proxy, but then a prompt injection could ask for a script
+tag. Rebuilding the document from a shape whitelist made the output safe by
+construction and, as a bonus, kept the drawings small enough to inline.
 
 **KV is a counter, not a lock.** Eventual consistency means a KV rate limiter
 can undershoot under concurrency. Keeping a per-isolate counter in front of it
@@ -545,5 +669,5 @@ character are fictional. The "AI companion" is a performance: it is not a real
 product, it does not run on your PC, and it is not your friend.
 
 Do not ship this with someone else's avatar art or audio unless you have the
-right to use it. Text and image generation remain subject to DeepSeek's and
-Hugging Face's terms, and to their billing.
+right to use it. Text and SVG generation remain subject to DeepSeek's terms and
+billing. There is no image-generation provider in the project.
